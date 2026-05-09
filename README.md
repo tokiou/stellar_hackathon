@@ -1,4 +1,4 @@
-# PromiseKeeper — Separación FRONT / BACK en Next.js
+# Wallet Copilot — Separación FRONT / BACK en Next.js
 
 Este proyecto está organizado como una **Next.js fullstack app** deployable en Vercel, pero mantiene una separación física clara entre frontend y backend.
 
