@@ -1,180 +1,92 @@
-# Functional Spec — Provider-Based Deterministic Risk Engine
+# Functional Spec — Frontend aligned to `frontend-spec.md`
 
-## Execution Decision
-- Strategy: SDD_SUBAGENTS.
-- Rule fired: R5 + SDD checklist 1,2,3,4,5.
-- Reason: the change introduces a new provider architecture, observable UI flow, transaction-simulation safety gate, external API fallbacks, and acceptance criteria for multiple verifiers.
+**Estado:** activo, resumen funcional.  
+**Para qué sirve:** explicar qué experiencia de producto debe construir el frontend sin entrar en todos los detalles técnicos.  
+**Historia:** reemplaza la spec funcional vieja del risk engine en frontend.
 
-## Product Goal
-Upgrade the current MVP risk engine into a modular, deterministic, provider-based system that combines multiple transparent risk signals before a user signs a Solana transaction.
+> La fuente de verdad completa es `FRONT/docs/frontend-spec.md`.
 
-The LLM must not calculate, override, or change risk. The LLM may only explain already-computed rule-based results in simpler language.
+## Product goal
 
-## Required Risk Levels
-- `LOW`
-- `MEDIUM`
-- `HIGH`
-- `BLOCKED`
+Construir el frontend de Wallet Copilot como un chat-first UI para operar con un agent. El usuario se autentica con Phantom Embedded + Google, ve su wallet/balances y conversa con el agent. El agent decide si ejecuta automáticamente o si necesita confirmación manual.
 
-## Required Data Contracts
-The implementation must expose these TypeScript contracts:
-- `RiskAssessment`
-- `RiskLevel`
-- `RiskReason`
-- `TokenSecurityData`
-- `LiquidityData`
-- `QuoteRiskData`
-- `RecipientRiskData`
-- `SimulationRiskData`
+## Decisiones funcionales obligatorias
 
-Each risk signal/reason must include:
-- check/source name
-- source/tool used
-- result value
-- threshold
-- risk impact
-- human-readable explanation
+- Framework: Next.js 14+ App Router.
+- UI: Tailwind CSS + shadcn/ui.
+- Wallet: `@phantom/react-sdk` solo para login/display/export key/disconnect.
+- Chain: Solana mainnet para el hackathon.
+- Transacciones: el frontend **no construye, no simula, no firma y no envía** transacciones.
+- Providers externos: el frontend **no llama directamente** a Jupiter, Helius, Birdeye, Solana RPC ni risk-score APIs.
+- Agent/backend: toda ejecución, risk policy, quotes, receipts y provider fallback vive detrás de `/api/*` y `BACK/services/*`.
 
-## Providers
-The system must include these provider classes/modules:
-- `LocalAllowlistProvider`
-- `JupiterQuoteRiskProvider`
-- `BirdeyeTokenSecurityProvider`
-- `ExternalRiskScoreProvider`
-- `RecipientValidationProvider`
-- `TransactionSimulationProvider`
-- `HeliusReceiptProvider`
-- `MockTokenSecurityProvider`
-- `MockRiskScoreProvider`
+## Experiencia principal
 
-The app must work without paid API keys. Missing keys must produce mock/demo or unavailable-labeled signals, never crashes. API key names may be documented, but secret values must never be read or exposed.
+### Pre-login
 
-## Functional Rules
+Mostrar una pantalla simple con CTA de Google/Phantom Embedded según lo defina `ConnectButton`. No hay flows multicuenta ni onramp.
 
-### 1. Token Allowlist
-Source: local allowlist in code.
-MVP allowlist: `SOL`, `USDC`, `BONK`, `JUP`, `PYTH`.
+### App conectada
 
-Rules:
-- Unknown token symbol: `BLOCKED`.
-- Token symbol with unknown mint address: `BLOCKED`.
-- Token mint mismatch: `BLOCKED`.
+- Desktop: shell de 3 columnas con sidebar, chat central y panel de assets/status.
+- Mobile: chat-first, bottom nav para Chat/Assets/Explore/History, sidebar como drawer.
+- Tabs mínimas: Chat funcional, Assets básico, History funcional, Explore placeholder.
 
-User reason: “Token is not supported by this MVP, so the transaction is blocked.”
+## Protocolo agent/frontend
 
-### 2. Token Security
-Preferred source: Birdeye Token Security API.
-Fallback: `MockTokenSecurityProvider`.
+Todo pasa por `POST /api/agent/message`:
 
-Fields when available:
-- creation/mint time
-- liquidity
-- holder count
-- holder concentration
-- ownership/security flags
-- mutable metadata
-- mint/freeze authority
-- verification/status
+- `{ type: 'user_message', content, user_threshold_usd? }`
+- `{ type: 'function_approve' }`
+- `{ type: 'function_reject' }`
 
-Rules:
-- Token age < 1 hour: `HIGH`.
-- Token age < 24 hours: `MEDIUM`.
-- Liquidity < $5,000: `HIGH`.
-- Liquidity < $50,000: `MEDIUM`.
-- Holder count < 100: `MEDIUM`.
-- Top holder concentration > 70%: `HIGH`.
-- Top holder concentration > 30%: `MEDIUM`.
-- Token is not verified: `MEDIUM`.
-- Mint/freeze authority enabled when suspicious: `MEDIUM` or `HIGH`.
+El backend responde `messages: AgentMessage[]` con:
 
-### 3. Risk Score Provider
-Preferred source: Solana Tracker Risk Score API or RugCheck API.
-Fallback: `MockRiskScoreProvider`.
+- `text` sin `execute`: mensaje normal del agent.
+- `text` con `execute`: resultado de una ejecución hecha por el agent.
+- `function_call`: propuesta pendiente que bloquea el input hasta Confirm/Cancel.
+- `alert`: alerta informativa/warning/danger no necesariamente asociada a una ejecución.
 
-Rules:
-- Critical risk: `HIGH`.
-- Severe/rug risk: `HIGH`.
-- Poor score per provider scale: `HIGH`.
-- Medium score: `MEDIUM`.
-- Provider unavailable: do not block; show “external risk provider unavailable”.
+Solo puede existir una propuesta pendiente por sesión.
 
-### 4. Price Impact and Route Quality
-Preferred source: Jupiter Quote API.
+## Riesgo y safety UI
 
-Rules:
-- `priceImpactPct > 10%`: `HIGH`.
-- `priceImpactPct > 3%`: `MEDIUM`.
-- No route found: `BLOCKED`.
-- Output amount zero/invalid: `BLOCKED`.
-- Unsupported/unknown venue if detectable: `MEDIUM`.
+El frontend no calcula riesgo. Renderiza el `risk` incluido por el agent en cada `function_call`:
 
-### 5. Slippage
-Source: local rule with user-selected slippage and quote fields.
+- `low`: sin alerta fuerte o badge discreto.
+- `medium`: banner warning con razones.
+- `critical`: banner danger; Confirm puede usar variante destructiva o requerir copy adicional si el backend lo pide en el futuro.
 
-Rules:
-- Slippage > 5%: `HIGH`.
-- Slippage > 2%: `MEDIUM`.
-- Slippage <= 1%: `LOW` unless other risks exist.
+Cualquier explicación tipo “how we checked this” debe venir de campos del backend/agent o de copy estático; no debe implicar que el frontend ejecutó providers externos.
 
-### 6. Recipient Validation
-Sources: `@solana/web3.js` `PublicKey`, local contacts, future SNS.
+## Estado cliente
 
-Rules:
-- Invalid Solana public key: `BLOCKED`.
-- Contact name not found: `BLOCKED`.
-- `.sol` name cannot be resolved deterministically: `BLOCKED`.
-- New address not in contacts: `MEDIUM`.
-- Known saved contact: `LOW`.
+- Zustand: mensajes, propuesta pendiente, status del chat y settings locales.
+- React Query: server state de endpoints propios (`/api/wallet/*`, `/api/network/*`, `/api/prices`).
+- Phantom SDK: estado de conexión, addresses, connect/disconnect/export key.
 
-### 7. Transaction Simulation
-Source: Solana RPC `simulateTransaction`.
+`pendingProposal` no se persiste; un refresh cancela implícitamente la propuesta activa.
 
-Rules:
-- Simulate prepared transaction before asking user to sign.
-- Simulation failure: `BLOCKED`.
-- Simulation success with unexpected balance changes: `HIGH`.
-- Simulation success with expected changes: continue.
-- Not prepared yet: show `Not simulated yet` as a visible `LOW`/informational signal.
+## Endpoints consumidos por el frontend
 
-### 8. Post-Transaction Receipt
-Source: Helius Enhanced Transactions API after signature.
+- `POST /api/agent/message`
+- `GET /api/wallet/balances`
+- `GET /api/wallet/allocation`
+- `GET /api/wallet/transactions`
+- `GET /api/network/status`
+- `GET /api/prices`
 
-Fields:
-- transaction type
-- token transfers
-- native transfers
-- fee
-- signature
-- status
-- timestamp
+Ningún documento de frontend debe introducir endpoints directos como `/api/jupiter/*`, `/api/helius/*`, llamadas RPC desde cliente o variables `VITE_*` de providers.
 
-If Helius is unavailable, store a basic receipt with signature and Solana Explorer URL.
+## Fuera de alcance hackathon
 
-## Aggregation Rules
-Final risk is deterministic:
-1. If any signal is `BLOCKED`, final risk = `BLOCKED`.
-2. Else if any signal is `HIGH`, final risk = `HIGH`.
-3. Else if two or more signals are `MEDIUM`, final risk = `HIGH`.
-4. Else if one signal is `MEDIUM`, final risk = `MEDIUM`.
-5. Else final risk = `LOW`.
-
-## UI Requirements
-Inside `SafetyReviewPanel`, add “How we checked this”. For each signal show:
-- Check name
-- Source/tool used
-- Result
-- Risk impact
-- Threshold
-- Explanation
-
-Mock/demo/unavailable data must be clearly labeled.
-
-## Acceptance Criteria
-- All required types and providers exist.
-- App works without paid API keys.
-- Risk decisions are deterministic and rule-based.
-- Safety Review exposes every check.
-- Transfers simulate before wallet signature.
-- Failed simulations block signing.
-- Helius receipt is attempted after confirmed transactions.
-- Specs exist for every task under `docs/task-specs/`.
+- Dark mode.
+- Multichain.
+- Websockets.
+- Push notifications.
+- Explore funcional.
+- Multi-cuenta.
+- i18n completo.
+- Tests como prioridad principal.
+- Animaciones complejas.
+- Onramp/fiat.

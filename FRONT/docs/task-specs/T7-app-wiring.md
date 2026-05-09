@@ -1,7 +1,19 @@
-# T7 Spec — App wiring and history
+# T7 Spec — App wiring
+
+> Alineado a `FRONT/docs/frontend-spec.md`.
 
 ## Objective
-Wire async provider risk assessment into the existing intent flow and signing flow.
+
+Integrar providers React, shells responsive y estado global en la app.
 
 ## Requirements
-Initial assessment runs after parsing/preview. Transfer prepare builds the transaction, simulates it, updates assessment, and only then calls sendTransaction if not BLOCKED. Receipt data is fetched after confirmation and stored in history metadata.
+
+- `app/layout.tsx` o el wrapper equivalente monta Query/Phantom/Theme providers.
+- `app/page.tsx` importa `FRONT/src/App.tsx`.
+- `AppShell` decide desktop/mobile por breakpoint `md`.
+- Tabs Chat/Assets/Explore/History respetan scope: Explore placeholder, History desde `/api/wallet/transactions`.
+
+## Acceptance
+
+- No hay `FRONT/src/pages/Index.tsx` como entrypoint principal.
+- No hay wiring de signing o RPC cliente.

@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
-import '@solana/wallet-adapter-react-ui/styles.css';
-import '../FRONT/src/index.css';
+import '../FRONT/src/styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'PromiseKeeper',
-  description: 'Verifiable work promises backed by escrow.',
+  title: 'Wallet Copilot',
+  description: 'Agent-first wallet copilot for Solana.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
