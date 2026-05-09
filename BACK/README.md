@@ -23,3 +23,6 @@ Configurar en Vercel o `.env.local` en la raíz:
 - `RISK_SCORE_API_KEY`
 - `HELIUS_API_KEY`
 - `HELIUS_API_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_CHAT_MODEL` (opcional, default `gpt-4.1-mini`)
+- `OPENAI_API_URL` (opcional, default `https://api.openai.com/v1`)
