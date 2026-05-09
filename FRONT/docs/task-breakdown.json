@@ -1,0 +1,339 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-05-09T13:18:50Z",
+  "goal": "Implement a deterministic provider-based risk engine for Intent Wallet Copilot, including transparent risk signals, mock/API fallback providers, pre-sign simulation, Helius receipt support, and Safety Review UI disclosure.",
+  "status": "done",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Specify risk contracts and TDD fixtures",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [],
+      "files": [
+        "src/lib/types.ts",
+        "src/lib/risk/__tests__/aggregation.test.ts",
+        "src/lib/risk/__tests__/providers.test.ts",
+        "src/lib/risk/aggregation.ts",
+        "docs/task-specs/T1-risk-contracts.md"
+      ],
+      "acceptanceCriteria": [
+        "Types exist for RiskAssessment, RiskLevel, RiskReason, TokenSecurityData, LiquidityData, QuoteRiskData, RecipientRiskData, SimulationRiskData.",
+        "RiskReason/risk signal includes source, value, threshold, risk impact, and human-readable explanation.",
+        "Provider result types allow success, unavailable, failed, and mock/demo labeling.",
+        "Tests are written before implementation for aggregation and provider behavior."
+      ],
+      "evidence": [
+        "Extended RiskReason type with checkName, source, value, threshold, riskImpact, explanation, isMock fields",
+        "Added RiskAssessment.providerResults and signals alias",
+        "Added all required data types: TokenSecurityData, LiquidityData, QuoteRiskData, RecipientRiskData, SimulationRiskData, TransactionReceipt",
+        "Added RiskProvider interface and RiskProviderInput/Result types",
+        "Created aggregation.test.ts with 8 test cases for aggregation rules (RED phase)",
+        "Created providers.test.ts with mock provider tests (RED phase)",
+        "Implemented aggregation.ts with deterministic risk level aggregation (GREEN phase)",
+        "Implemented MockTokenSecurityProvider and MockRiskScoreProvider (GREEN phase)",
+        "Added vitest config and test scripts to package.json",
+        "Validation: npm test -- --run passed 40 tests across 6 files."
+      ]
+    },
+    {
+      "id": "T2",
+      "title": "Implement local deterministic providers and mocks",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T1"
+      ],
+      "files": [
+        "src/lib/risk/providers/LocalAllowlistProvider.ts",
+        "src/lib/risk/providers/RecipientValidationProvider.ts",
+        "src/lib/risk/providers/MockTokenSecurityProvider.ts",
+        "src/lib/risk/providers/MockRiskScoreProvider.ts",
+        "docs/task-specs/T2-local-providers.md"
+      ],
+      "acceptanceCriteria": [
+        "LocalAllowlistProvider blocks unknown symbols, unknown mints, and mint mismatches.",
+        "RecipientValidationProvider blocks invalid public keys, unresolved .sol names, and unknown contact names; new valid addresses are MEDIUM; saved contacts are LOW.",
+        "Mock providers return deterministic demo data and are clearly labeled mock/demo.",
+        "Tests cover LOW, MEDIUM, HIGH, and BLOCKED outputs where applicable."
+      ],
+      "evidence": [
+        "Created localProviders.test.ts with 10 test cases covering allowlist and recipient validation (RED phase)",
+        "Implemented LocalAllowlistProvider enforcing SOL/USDC/BONK/JUP/PYTH allowlist with BLOCKED for unknown tokens",
+        "Implemented RecipientValidationProvider with PublicKey validation, .sol blocking, contact name blocking, new address MEDIUM, saved contact LOW",
+        "Mock providers from T1 include isMock flag and clear demo data labeling",
+        "All providers follow RiskProvider interface contract"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Implement external/API-capable providers with safe fallbacks",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "files": [
+        "src/lib/risk/providers/JupiterQuoteRiskProvider.ts",
+        "src/lib/risk/providers/BirdeyeTokenSecurityProvider.ts",
+        "src/lib/risk/providers/ExternalRiskScoreProvider.ts",
+        "docs/task-specs/T3-external-providers.md"
+      ],
+      "acceptanceCriteria": [
+        "Jupiter quote risk enforces no route/invalid output BLOCKED, price impact >10 HIGH, >3 MEDIUM, slippage >5 HIGH, >2 MEDIUM.",
+        "Birdeye token security rules enforce age, liquidity, holder count, concentration, verification, and mint/freeze authority thresholds.",
+        "External risk score provider maps critical/severe/rug/poor to HIGH, medium to MEDIUM, unavailable to non-blocking informational signal.",
+        "No API secret is read or exposed; missing keys use mock/demo providers or unavailable signals."
+      ],
+      "evidence": [
+        "Created externalProviders.test.ts with tests for quote risk, price impact, slippage, and fallback behavior (RED phase)",
+        "Implemented JupiterQuoteRiskProvider with all threshold rules: no route BLOCKED, price impact >10 HIGH />3 MEDIUM, slippage >5 HIGH />2 MEDIUM",
+        "Implemented BirdeyeTokenSecurityProvider with import.meta.env.VITE_BIRDEYE_API_KEY check and fallback to MockTokenSecurityProvider",
+        "Implemented ExternalRiskScoreProvider with import.meta.env.VITE_RISK_SCORE_API_KEY check and fallback to MockRiskScoreProvider",
+        "All providers check for API keys without exposing values and gracefully fall back to mock data",
+        "Birdeye provider now calls configured Birdeye API defensively and falls back to mock on unavailable/error.",
+        "External risk score provider calls configured VITE_RISK_SCORE_API_URL defensively and falls back to mock/unavailable signals."
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Implement transaction simulation and receipt providers",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T1"
+      ],
+      "files": [
+        "src/lib/risk/providers/TransactionSimulationProvider.ts",
+        "src/lib/risk/providers/HeliusReceiptProvider.ts",
+        "docs/task-specs/T4-simulation-receipts.md"
+      ],
+      "acceptanceCriteria": [
+        "Prepared transactions are simulated before wallet signing.",
+        "Simulation failure creates BLOCKED signal and prevents signing.",
+        "Simulation not-yet-run is visible in the Safety Review before preparation.",
+        "Helius receipt provider returns enhanced receipt when configured and basic explorer receipt when unavailable."
+      ],
+      "evidence": [
+        "Created simulationReceipt.test.ts with tests for simulation states and receipt fallback (RED phase)",
+        "Implemented TransactionSimulationProvider with not-yet-run LOW signal, simulation failure BLOCKED, success LOW",
+        "Implemented HeliusReceiptProvider with import.meta.env.VITE_HELIUS_API_KEY check",
+        "Receipt provider always returns a receipt: enhanced when Helius available, basic with explorer URL when not",
+        "Explorer URLs use devnet/mainnet cluster based on VITE_SOLANA_NETWORK",
+        "TransactionSimulationProvider returns visible not-yet-run LOW signal and BLOCKED on simulation failure.",
+        "HeliusReceiptProvider calls configured Helius enhanced transactions endpoint when key is present; otherwise returns basic explorer receipt."
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Implement deterministic risk aggregation engine",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T2",
+        "T3",
+        "T4"
+      ],
+      "files": [
+        "src/lib/riskEngine.ts",
+        "src/lib/risk/aggregation.ts",
+        "docs/task-specs/T5-aggregation.md"
+      ],
+      "acceptanceCriteria": [
+        "If any signal is BLOCKED, final risk is BLOCKED.",
+        "Else if any signal is HIGH, final risk is HIGH.",
+        "Else if two or more signals are MEDIUM, final risk is HIGH.",
+        "Else if one signal is MEDIUM, final risk is MEDIUM.",
+        "Else final risk is LOW.",
+        "The engine is deterministic and contains no LLM/AI risk logic."
+      ],
+      "evidence": [
+        "Created riskEngine.test.ts with integration tests for provider orchestration (RED phase)",
+        "Refactored riskEngine.ts to orchestrate all 6 providers asynchronously",
+        "Uses aggregateRiskLevel() from aggregation.ts implementing exact rules: BLOCKED > HIGH > 2+ MEDIUM > 1 MEDIUM > LOW",
+        "All provider results collected in RiskAssessment.providerResults",
+        "Backward compatibility maintained with RiskReason format and signals alias",
+        "No LLM/AI logic - purely deterministic rule-based aggregation",
+        "assessRisk is now async to support provider orchestration"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Integrate Safety Review UI transparency",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T5"
+      ],
+      "files": [
+        "src/components/SafetyReviewPanel.tsx",
+        "docs/task-specs/T6-safety-ui.md"
+      ],
+      "acceptanceCriteria": [
+        "Safety Review includes a 'How we checked this' section.",
+        "Each signal shows check name, source/tool, result/value, risk impact, threshold, and explanation.",
+        "Mock/demo/unavailable checks are visibly labeled.",
+        "Existing recommendation and high-risk confirmation flow still work."
+      ],
+      "evidence": [
+        "Added expandable 'How We Checked This' section with ChevronDown/Up toggle",
+        "Created RiskSignalDetail component showing checkName, source, result, risk impact, threshold, explanation",
+        "Mock/demo signals display DEMO DATA badge with FlaskConical icon",
+        "formatValue helper formats numbers, booleans, and nulls for display",
+        "Existing reasons/recommendation UI preserved and enhanced",
+        "All existing risk confirmation flows maintained"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Wire risk engine into app flow and history",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T5",
+        "T6"
+      ],
+      "files": [
+        "src/pages/Index.tsx",
+        "src/lib/history.ts",
+        "src/lib/types.ts",
+        "docs/task-specs/T7-app-wiring.md"
+      ],
+      "acceptanceCriteria": [
+        "Initial assessment runs asynchronously with provider signals.",
+        "Prepared transfer transaction is simulated before sendTransaction is called.",
+        "BLOCKED simulation stops signing and updates UI/history.",
+        "Post-confirmation receipt is fetched and stored/displayed as history metadata when possible."
+      ],
+      "evidence": [
+        "Updated handleIntentSubmit to await assessRisk() asynchronously before saving history",
+        "Updated handlePrepare to build tx, then call assessRisk with preparedTransaction and connection",
+        "Simulation results update riskAssessment state before sendTransaction",
+        "BLOCKED simulation stops flow, sets error, and marks history as failed",
+        "After confirmation, HeliusReceiptProvider.fetchReceipt() is called",
+        "Receipt stored in history entry's receipt field when available",
+        "Receipt fetch errors are non-critical and logged"
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Document environment configuration and validate build/tests",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6",
+        "T7"
+      ],
+      "files": [
+        ".env.example",
+        ".gitignore",
+        "package.json",
+        "vitest.config.ts",
+        "verify-implementation.sh",
+        "docs/task-specs/T8-validation.md"
+      ],
+      "acceptanceCriteria": [
+        ".env.example lists only variable names/placeholders for optional APIs.",
+        "npm test, npm run build, and npm run lint are attempted and results recorded.",
+        "docs/task-breakdown.json statuses/evidence are updated.",
+        "No secret values are committed or printed."
+      ],
+      "evidence": [
+        "Created .env.example with placeholder variable names only; file not read back because safe-secrets guardrail treats .env* as protected.",
+        "Created .gitignore to prevent .env files from being committed.",
+        "Added Vitest test scripts/dependencies and vitest.config.ts.",
+        "npm install --registry=https://registry.npmjs.org/ partially timed out but installed node_modules sufficient for validation.",
+        "npm test -- --run passed: 6 test files, 40 tests.",
+        "npm run build passed; Vite produced dist successfully with existing bundle-size warnings.",
+        "npm run lint completed with 0 errors and 6 pre-existing react-refresh warnings in UI primitives.",
+        "npx tsc -p tsconfig.app.json --noEmit was attempted and failed on pre-existing third-party/UI typing issues unrelated to this risk-engine change.",
+        "No secret values were read, printed, or committed."
+      ]
+    },
+    {
+      "id": "T9",
+      "title": "Replace demo-only provider stubs with real public/API implementations and fallback labeling",
+      "owner": "implementer",
+      "status": "done",
+      "dependsOn": [
+        "T3",
+        "T4",
+        "T7"
+      ],
+      "files": [
+        "src/lib/risk/providers/JupiterQuoteRiskProvider.ts",
+        "src/lib/risk/providers/BirdeyeTokenSecurityProvider.ts",
+        "src/lib/risk/providers/ExternalRiskScoreProvider.ts",
+        "src/lib/risk/providers/HeliusReceiptProvider.ts",
+        "src/lib/risk/__tests__/externalProviders.test.ts",
+        "docs/api-provider-fallbacks.md"
+      ],
+      "acceptanceCriteria": [
+        "JupiterQuoteRiskProvider fetches a real Jupiter quote when configured/available instead of only inspecting demo quote data.",
+        "BirdeyeTokenSecurityProvider performs a real HTTP request when VITE_BIRDEYE_API_KEY is present and falls back to clearly labeled mock data when unavailable.",
+        "ExternalRiskScoreProvider performs a real HTTP request when VITE_RISK_SCORE_API_URL is configured and falls back/mock-labels when unavailable.",
+        "HeliusReceiptProvider performs a real enhanced transaction request when VITE_HELIUS_API_KEY is present and falls back to basic receipt when unavailable.",
+        "No secret values are read or printed; only VITE_* variable names are referenced.",
+        "Tests cover real-fetch success paths using mocked fetch and missing-key fallback paths."
+      ],
+      "evidence": [
+        "JupiterQuoteRiskProvider now fetches real quotes from Jupiter Quote API (default: https://quote-api.jup.ag/v6)",
+        "Uses TOKEN_REGISTRY to get mints and decimals, converts amounts to raw units (multiply by 10^decimals)",
+        "Parses priceImpactPct, routePlan (single or multi-hop), outAmount, otherAmountThreshold from API response",
+        "Falls back to demo quote (input.quote) when API fetch fails, ensuring app works without API access",
+        "BirdeyeTokenSecurityProvider already had real API implementation; enhanced with detailed comments explaining fallback",
+        "ExternalRiskScoreProvider already had real API implementation; enhanced with detailed comments explaining fallback",
+        "HeliusReceiptProvider already had real API implementation; enhanced with detailed comments explaining fallback",
+        "Added comprehensive tests with mocked fetch covering: successful API calls, HIGH/MEDIUM price impact parsing, multi-hop routes, fallback behavior",
+        "Added tests for Birdeye, ExternalRiskScore, and Helius providers verifying real fetch paths and fallback paths",
+        "Created docs/api-provider-fallbacks.md documenting when real API vs demo data is used and why",
+        "Added inline comments to all providers explaining fallback strategy: graceful degradation when APIs unavailable",
+        "All providers use only VITE_* prefixed environment variables; no secrets are read or printed",
+        "npm test -- --run: 52 tests passed (6 files)",
+        "npm run build: succeeded (dist generated successfully)",
+        "npm run lint: 0 errors, 6 pre-existing warnings in UI primitives (not modified)",
+        "Implemented real Jupiter Quote API path in JupiterQuoteRiskProvider using TOKEN_REGISTRY mints/decimals and raw amount conversion.",
+        "Default Jupiter endpoint updated to https://lite-api.jup.ag/swap/v1 from current docs; VITE_JUPITER_API_URL can override.",
+        "Parsed Jupiter priceImpactPct, routePlan, outAmount, slippageBps, and otherAmountThreshold response fields defensively.",
+        "Fixed tester-reviewer C1 finding by renaming slippageBps parameter to slippagePercent.",
+        "Added HTTP error fallback test for Jupiter API 429/failed responses.",
+        "Birdeye, external risk score, and Helius providers have real fetch paths when configured and fallback paths when unavailable.",
+        "npm test -- --run passed: 6 files, 53 tests.",
+        "npm run build passed.",
+        "npm run lint: 0 errors, 6 pre-existing UI primitive warnings."
+      ]
+    },
+    {
+      "id": "T10",
+      "title": "Validate functional run after real API implementation",
+      "owner": "tester-reviewer",
+      "status": "done",
+      "dependsOn": [
+        "T9"
+      ],
+      "files": [
+        "docs/task-breakdown.json"
+      ],
+      "acceptanceCriteria": [
+        "npm test -- --run passes",
+        "npm run build passes",
+        "npm run lint has no new errors",
+        "Tester-reviewer report validates real API paths and fallback behavior"
+      ],
+      "evidence": [
+        "Tester-reviewer returned CONDITIONAL PASS for T9 before follow-up cleanup.",
+        "Follow-up cleanup fixed critical naming issue C1 (slippagePercent).",
+        "Added HTTP error fallback test; total tests now 53 passing.",
+        "npm test -- --run passed.",
+        "npm run build passed.",
+        "npm run lint completed with 0 errors and 6 pre-existing warnings."
+      ]
+    }
+  ]
+}
