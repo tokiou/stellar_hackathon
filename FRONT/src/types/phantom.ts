@@ -45,6 +45,17 @@ export interface PhantomProvider {
   signAllTransactions<TTransaction>(transactions: TTransaction[]): Promise<TTransaction[]>;
 
   /**
+   * Sign and send a transaction
+   * @param transaction Transaction to sign and broadcast
+   * @param options Optional signing options
+   * @returns Promise resolving to response object
+   */
+  signAndSendTransaction<TTransaction>(
+    transaction: TTransaction,
+    options?: { preflightCommitment?: 'processed' | 'confirmed' | 'finalized'; skipPreflight?: boolean }
+  ): Promise<{ signature: string } | string>;
+
+  /**
    * Sign a message
    * @param message Message to sign (Uint8Array or string)
    * @param encoding Optional encoding ('utf8' or 'hex')
@@ -97,6 +108,25 @@ declare global {
     };
   }
 }
+
+export type PhantomExecutionResult = {
+  tx_signature: string;
+};
+
+export type PhantomExecutionErrorCode =
+  | 'phantom_not_detected'
+  | 'phantom_not_connected'
+  | 'wallet_mismatch'
+  | 'user_rejected'
+  | 'account_changed'
+  | 'blockhash_expired'
+  | 'send_failed'
+  | 'unknown';
+
+export type PhantomExecutionError = {
+  code: PhantomExecutionErrorCode;
+  message: string;
+};
 
 /**
  * Helper to check if Phantom is installed and get the provider

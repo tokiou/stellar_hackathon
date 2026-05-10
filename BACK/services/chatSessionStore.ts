@@ -6,11 +6,22 @@
 
 import { BaseMessage } from '@langchain/core/messages';
 
+export type SolanaNetwork = 'devnet' | 'mainnet-beta';
+export type ProposalState = 'awaiting_approval' | 'preparing_transaction' | 'awaiting_signature' | 'submitted' | 'confirming' | 'confirmed' | 'failed' | 'cancelled';
+
 export type PendingProposal = {
   toolName: string;
   toolArgs: Record<string, unknown>;
   toolResult: Record<string, unknown>;
   createdAt: number;
+  state: ProposalState;
+  proposalType: 'transfer' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
+  expiresAt: number;
+  expectedUserAddress: string | null;
+  network: SolanaNetwork;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: number;
+  txSignature?: string;
 };
 
 export type SessionState = {

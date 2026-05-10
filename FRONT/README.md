@@ -14,9 +14,10 @@ Si otro documento parece contradecirla, gana `frontend-spec.md` y el documento d
 
 - Next.js 14+ App Router, TypeScript, Tailwind CSS + shadcn/ui.
 - Código UI en `FRONT/src/`, exportado desde `FRONT/src/App.tsx` y consumido por `app/page.tsx`.
-- Phantom Browser Extension para autenticación: conexión directa con wallet del usuario, sin SDK embebido ni OAuth.
-- El frontend **no construye, firma ni envía transacciones** y **no habla directo con Solana RPC, Jupiter, Helius, Birdeye ni risk-score providers**.
-- Toda ejecución de transacciones y toda integración blockchain/provider vive detrás del backend/agent (`/api/*` y `BACK/services/*`).
+- Phantom Browser Extension para autenticación y firma/envío de transacciones preparadas por el backend.
+- El frontend **no calcula riesgo, no consulta providers externos y no construye transacciones desde intención de usuario**.
+- Para propuestas aprobadas, el backend devuelve una unsigned transaction y el frontend la firma/envía con Phantom injected (`signAndSendTransaction`).
+- Toda integración blockchain/provider de negocio, quotes, risk policy y construcción canónica de transacciones vive detrás del backend/agent (`/api/*` y `BACK/services/*`).
 
 ## Documentos útiles
 

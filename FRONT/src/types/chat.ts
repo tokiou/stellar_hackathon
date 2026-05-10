@@ -17,7 +17,10 @@ export type ChatMessage = UserChatMessage | AgentChatMessage;
 
 export type ProposalUiState =
   | 'pending'
-  | 'awaiting_execution'
+  | 'preparing_transaction'
+  | 'awaiting_signature'
+  | 'submitted'
+  | 'confirming'
   | 'confirmed'
   | 'failed'
   | 'cancelled';

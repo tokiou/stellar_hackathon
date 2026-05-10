@@ -1,76 +1,25 @@
 import { useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { streamChat, postApprove, postReject, ApiClientError, TransactionPayload } from '@/lib/api/client';
+import {
+  streamChat,
+  postApprove,
+  postFunctionResult,
+  postReject,
+  ApiClientError,
+} from '@/lib/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useWallet } from './useWallet';
-import { getPhantomProvider } from '@/types/phantom';
-import { Connection, SendTransactionError, VersionedTransaction, Transaction } from '@solana/web3.js';
 
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/**
- * Signs and sends a transaction using Phantom wallet.
- * Handles different formats: versioned message, versioned transaction, legacy transaction.
- * @returns The transaction signature if successful
- * @throws Error if wallet not detected or transaction fails
- */
-async function signAndSendTransaction(txPayload: TransactionPayload): Promise<string> {
-  const provider = getPhantomProvider();
-  if (!provider) throw new Error('Phantom wallet not detected');
-
-  const raw = base64ToUint8Array(txPayload.unsigned_tx_base64);
-  const conn = new Connection('https://api.devnet.solana.com', 'confirmed');
-
-  try {
-    if (txPayload.format === 'base64_versioned_transaction') {
-      const tx = VersionedTransaction.deserialize(raw);
-      const signed = await provider.signTransaction(tx);
-      const sig = await conn.sendRawTransaction((signed as VersionedTransaction).serialize(), {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-      });
-      await conn.confirmTransaction({
-        signature: sig,
-        blockhash: txPayload.recent_blockhash ?? tx.message.recentBlockhash,
-        lastValidBlockHeight: txPayload.last_valid_block_height,
-      }, 'confirmed');
-      return sig;
-    }
-
-    const legacyTx = Transaction.from(raw);
-    const signed = await provider.signTransaction(legacyTx);
-    const sig = await conn.sendRawTransaction((signed as Transaction).serialize(), {
-      skipPreflight: false,
-      preflightCommitment: 'confirmed',
-    });
-    await conn.confirmTransaction({
-      signature: sig,
-      blockhash: txPayload.recent_blockhash ?? legacyTx.recentBlockhash,
-      lastValidBlockHeight: txPayload.last_valid_block_height,
-    }, 'confirmed');
-    return sig;
-  } catch (error) {
-    if (error instanceof SendTransactionError) {
-      const logs = await error.getLogs(conn).catch(() => []);
-      const logText = logs.length > 0 ? ` Logs: ${logs.join(' | ')}` : '';
-      throw new Error(`${error.message}${logText}`);
-    }
-    throw error;
-  }
-}
+type SignAndSendError = Error & {
+  code?: string;
+};
 
 export function useAgentMessage() {
   const queryClient = useQueryClient();
   const threshold = useSettingsStore((state) => state.autoConfirmThresholdUsd);
-  const { address: userAddress } = useWallet();
-  
+  const { address: userAddress, signAndSendPreparedTransaction } = useWallet();
+
   // Store actions
   const sessionId = useChatStore((state) => state.sessionId);
   const setSessionId = useChatStore((state) => state.setSessionId);
@@ -126,7 +75,14 @@ export function useAgentMessage() {
             // If awaiting_approval, the proposal handler already updated status
           },
           onError: (error) => {
-            console.error('[chat] SSE error:', error);
+            console.warn('[chat] SSE error:', error.code, error.message);
+            addAgentMessages([
+              {
+                type: 'text',
+                content: error.message || 'No pude completar la respuesta. Probá reformular el pedido.',
+                timestamp: new Date().toISOString(),
+              },
+            ]);
             finishStreaming();
             setStatus('idle');
           },
@@ -155,6 +111,7 @@ export function useAgentMessage() {
     finishStreaming,
     setSessionId,
     setProposalFromSSE,
+    addAgentMessages,
     setStatus,
   ]);
 
@@ -164,41 +121,80 @@ export function useAgentMessage() {
     if (!proposal || !currentSessionId) return;
 
     setStatus('executing');
-    setProposalUiState('awaiting_execution');
+    setProposalUiState('preparing_transaction');
 
     try {
       const response = await postApprove(currentSessionId);
+      if (response.messages.length > 0) {
+        addAgentMessages(response.messages);
+      }
 
-      // Check if backend returned a transaction to sign
-      if (!response.transaction) {
-        // No transaction to sign - this is an error state
-        console.error('[chat] No transaction in approve response');
-        completeProposal('failed', { 
-          status: 'failed', 
-          error: 'El servidor no devolvió una transacción para firmar' 
+      if (!response.transaction?.unsigned_tx_base64) {
+        completeProposal('failed', {
+          status: 'failed',
+          error: 'No se pudo preparar la transacción para firma',
         });
         return;
       }
 
-      // Sign and send the transaction using Phantom
-      const txSig = await signAndSendTransaction(response.transaction);
+      setProposalUiState('awaiting_signature');
 
-      // Transaction was successful - complete with real signature
-      // Don't add backend messages to avoid duplication - completeProposal will add the result message
-      completeProposal('success', { 
-        status: 'success', 
-        tx_hash: txSig 
+      const expectedUserAddress = proposal.execution?.expected_user_address;
+      const signResult = await signAndSendPreparedTransaction(
+        response.transaction.unsigned_tx_base64,
+        expectedUserAddress ?? userAddress,
+      );
+
+      setProposalUiState('submitted');
+      postFunctionResult(currentSessionId, signResult.tx_signature, 'submitted').catch((callbackError) => {
+        console.warn('[chat] Optional function_result submitted callback failed:', callbackError);
       });
-      
-      // Invalidate wallet queries to refresh balances
+
+      completeProposal('success', {
+        status: 'success',
+        tx_hash: signResult.tx_signature,
+      });
+
       await queryClient.invalidateQueries({ queryKey: ['wallet'] });
-      
+      postFunctionResult(currentSessionId, signResult.tx_signature, 'confirmed').catch((callbackError) => {
+        console.warn('[chat] Optional function_result confirmed callback failed:', callbackError);
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Error al aprobar la transferencia';
+      const errorCode = (error as SignAndSendError)?.code;
+      const rejectedByUser = errorCode === 'user_rejected' || /rejected|denied/i.test(errorMessage);
+      const shouldCancel =
+        errorCode === 'wallet_mismatch' ||
+        errorCode === 'phantom_not_connected' ||
+        errorCode === 'account_changed';
+
       console.error('[chat] Approve error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Error desconocido al ejecutar la transacción';
-      completeProposal('failed', { status: 'failed', error: errorMessage });
+
+      if (rejectedByUser || shouldCancel) {
+        setProposalUiState('cancelled');
+        setPendingProposal(null);
+        setStatus('idle');
+        postReject(currentSessionId, errorMessage).catch((rejectError) => {
+          console.warn('[chat] Optional reject cleanup failed:', rejectError);
+        });
+        return;
+      }
+
+      completeProposal('failed', {
+        status: 'failed',
+        error: errorMessage,
+      });
     }
-  }, [completeProposal, setStatus, setProposalUiState, queryClient]);
+  }, [
+    userAddress,
+    addAgentMessages,
+    completeProposal,
+    setStatus,
+    setProposalUiState,
+    setPendingProposal,
+    signAndSendPreparedTransaction,
+    queryClient,
+  ]);
 
   const rejectProposal = useCallback(async () => {
     const currentSessionId = useChatStore.getState().sessionId;

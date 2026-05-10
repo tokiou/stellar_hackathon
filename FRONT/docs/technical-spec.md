@@ -23,9 +23,10 @@ El código actual en `FRONT/src` implementa una app tipo “intent wallet” con
 El SSoT nuevo exige otra arquitectura:
 
 - Next.js App Router + `FRONT/src/App.tsx` como entry UI.
-- Phantom Embedded Wallet SDK (`@phantom/react-sdk`) solo para login/display/export/disconnect.
+- Phantom Browser Extension / injected provider para login/display y firma/envío de unsigned transactions preparadas por backend.
 - Frontend chat-first.
-- El frontend **no construye, no simula, no firma y no envía transacciones**.
+- El frontend **no construye ni simula transacciones desde intención de usuario**.
+- El backend prepara unsigned transactions; el frontend las firma/envía con Phantom injected.
 - El frontend **no llama directo a Solana RPC, Jupiter, Helius, Birdeye ni risk-score providers**.
 - Toda ejecución, risk policy, quotes, receipts y providers viven detrás del backend/agent.
 - El frontend consume solo endpoints propios:
@@ -64,7 +65,7 @@ Actualmente existen dependencias que el frontend nuevo no debería usar en clien
 
 Faltan dependencias requeridas por el SSoT:
 
-- `@phantom/react-sdk`
+- Phantom injected provider (`window.phantom.solana`)
 - `zustand`
 - `@tanstack/react-query`
 - `zod`
@@ -83,7 +84,7 @@ Faltan dependencias requeridas por el SSoT:
 | `FRONT/src/lib/intentParser.ts` | Parser local. | Reemplazar por `POST /api/agent/message`. El parsing vive en backend/agent. |
 | `FRONT/src/pages/Index.tsx` | Flow viejo parse/preview/sign. | No usar como entry. Eventualmente eliminar. |
 | `FRONT/src/pages/NotFound.tsx` | Patrón pages legacy. | Usar `app/not-found.tsx` si hace falta. |
-| `Header.tsx`, `LandingHero.tsx` | Dependen de `WalletMultiButton`. | Reescribir para Phantom Embedded o reemplazar por `TopBar`/landing simple. |
+| `Header.tsx`, `LandingHero.tsx` | Dependen de `WalletMultiButton`. | Reescribir para Phantom injected o reemplazar por `TopBar`/landing simple. |
 | `ConfirmationSection.tsx` | Pide firma wallet y high-risk phrase local. | Reemplazar por proposal cards Confirm/Cancel que postean al agent. |
 | `SafetyReviewPanel.tsx` | Renderiza `RiskAssessment` viejo con levels `LOW/MEDIUM/HIGH/BLOCKED`. | Reemplazar por `RiskAlert`/badges basados en `RiskInfo` del agent (`low/medium/critical`). |
 | `HistoryPanel.tsx` | Usa localStorage para tx history. | Reemplazar por `/api/wallet/transactions`. Chat history local puede quedar separado. |
@@ -113,7 +114,7 @@ FRONT/src/App.tsx
             -> RightPanel / Assets views
 ```
 
-Regla central: `FRONT/src` no importa APIs de Solana para signing/RPC ni providers externos. Si se necesita información blockchain, se pide a `/api/*`.
+Regla central: `FRONT/src` no consume providers externos ni construye transacciones de negocio. Si se necesita información blockchain, se pide a `/api/*`. La única excepción permitida es deserializar una unsigned transaction preparada por backend y enviarla con Phantom injected.
 
 ---
 
@@ -232,33 +233,19 @@ export default function App() {
 }
 ```
 
-### 4.2 `providers/PhantomProvider.tsx`
+### 4.2 `types/phantom.ts` y `hooks/useWallet.ts`
 
-Usar `@phantom/react-sdk`:
+Usar el provider injected de Phantom:
 
 ```tsx
 'use client';
 
-import { PhantomProvider as SDKPhantomProvider, AddressType } from '@phantom/react-sdk';
-
-export function PhantomProvider({ children }: { children: React.ReactNode }) {
-  return (
-    <SDKPhantomProvider
-      config={{
-        providers: ['google'],
-        addressTypes: [AddressType.solana],
-        appId: process.env.NEXT_PUBLIC_PHANTOM_APP_ID!,
-      }}
-      appName="Wallet Copilot"
-      appIcon="/icon.png"
-    >
-      {children}
-    </SDKPhantomProvider>
-  );
+export function getPhantomProvider() {
+  return window.phantom?.solana?.isPhantom ? window.phantom.solana : undefined;
 }
 ```
 
-No exponer métodos de signing desde wrappers propios.
+Exponer solo `signAndSendPreparedTransaction(unsigned_tx_base64)` para transacciones preparadas por backend. No exponer builders ni RPC genérico.
 
 ### 4.3 `providers/QueryProvider.tsx`
 
@@ -307,15 +294,20 @@ Implementación conceptual:
 - Derivar `solanaAddress` desde `addresses.find(a => a.type === 'solana')`.
 - Llamar `useWalletBalances(solanaAddress)`.
 
+Permitido:
+
+- `signAndSendPreparedTransaction(unsigned_tx_base64)`
+- deserializar `VersionedTransaction` desde payload backend
+- `signAndSendTransaction` únicamente dentro del helper de Phantom
+
 Prohibido:
 
 - `signTransaction`
-- `signAndSendTransaction`
 - `sendTransaction`
 - `Connection`
 - `clusterApiUrl`
 - `PublicKey`
-- cualquier firma/RPC en este hook.
+- cualquier RPC/provider externo o construcción de transacciones desde intención de usuario.
 
 ### 5.2 `ConnectButton.tsx`
 
@@ -664,7 +656,7 @@ Muestra:
 - Risk badge/banner.
 - Cancel + Confirm.
 
-Confirm no firma: llama `approve` mutation.
+Confirm llama `approve`; si backend devuelve `unsigned_tx_base64`, el frontend firma/envía con Phantom injected.
 
 ### 13.3 `SendProposalCard`
 
@@ -743,7 +735,7 @@ Incluye:
 - Network read-only: “Mainnet”.
 - Toggle risk warnings.
 - Dirección completa + copy.
-- Export private key vía Phantom Embedded SDK.
+- Disconnect/copy address vía Phantom injected.
 - Disconnect: `phantom.disconnect()` + `clearChat()`.
 - About/version/docs link.
 
@@ -812,7 +804,7 @@ Los endpoints provider-specific pueden quedar como implementación interna/legac
 ### 18.1 Agregar dependencias
 
 ```bash
-npm install @phantom/react-sdk zustand @tanstack/react-query zod date-fns
+npm install zustand @tanstack/react-query zod date-fns
 ```
 
 No ejecutar en esta tarea documental; esto es para la fase de implementación.
@@ -931,7 +923,7 @@ Acceptance:
 
 - Swap small: `text+execute` auto result.
 - Swap large: `function_call` + approve + `text+execute`.
-- Frontend no firma ni llama providers directos.
+- Frontend firma/envía con Phantom injected solo unsigned transactions preparadas por backend; no llama providers externos directos.
 
 ### Fase F — Limpieza final
 
@@ -952,7 +944,6 @@ Después de la migración, estas búsquedas no deberían devolver usos en UI nue
 @solana/spl-token
 sendTransaction
 signTransaction
-signAndSendTransaction
 ConnectionProvider
 WalletProvider
 WalletMultiButton
@@ -967,7 +958,7 @@ HeliusReceiptProvider
 TransactionSimulationProvider
 ```
 
-Excepción temporal: archivos legacy no importados durante migración. En limpieza final también deben salir o moverse.
+Excepción permitida: `signAndSendTransaction` solo dentro del helper de Phantom que recibe `unsigned_tx_base64` desde backend. Excepción temporal adicional: archivos legacy no importados durante migración. En limpieza final también deben salir o moverse.
 
 ---
 
@@ -992,12 +983,13 @@ La migración cumple el SSoT cuando:
 - `FRONT/src/App.tsx` monta Phantom/Query/Theme providers y `AppShell`.
 - No se usa `FRONT/src/pages/Index.tsx` como entry real.
 - No hay wallet adapter en la UI nueva.
-- No hay RPC/signing/transaction builder en frontend.
-- El login/display wallet usa Phantom Embedded.
+- No hay RPC/provider externo ni transaction builder en frontend.
+- La firma/envío en frontend se limita a unsigned transactions preparadas por backend.
+- El login/display wallet usa Phantom injected.
 - El chat usa `POST /api/agent/message`.
 - El frontend soporta `text`, `function_call`, `alert`, `text+execute`.
 - Solo hay una propuesta pendiente por sesión.
-- Confirm/Cancel no mandan txs, solo approve/reject.
+- Confirm llama approve; si backend devuelve unsigned tx, el frontend firma/envía con Phantom y puede reportar `tx_signature`.
 - Balances/allocation/history/network/prices vienen de `/api/*` propios.
 - Responses se validan con Zod.
 - Tema/layout cumplen el mockup light del SSoT.

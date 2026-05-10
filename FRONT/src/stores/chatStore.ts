@@ -38,7 +38,7 @@ interface ChatStore {
   setPendingProposal: (proposal: PendingProposal | null) => void;
   setProposalFromSSE: (proposal: Extract<AgentMessage, { type: 'function_call' }>) => void;
   setProposalUiState: (state: ProposalUiState | null) => void;
-  completeProposal: (status: ExecuteInfo['status'], execute?: ExecuteInfo) => void;
+  completeProposal: (status: 'success' | 'confirmed' | 'failed', execute?: ExecuteInfo) => void;
 
   // Status actions
   setStatus: (status: ChatStatus) => void;
@@ -160,39 +160,45 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  setProposalUiState: (proposalUiState) => set({ proposalUiState }),
+  setProposalUiState: (proposalUiState) => set((state) => ({
+    proposalUiState,
+    pendingProposal:
+      state.pendingProposal && proposalUiState
+        ? { ...state.pendingProposal, uiState: proposalUiState }
+        : state.pendingProposal,
+  })),
 
   completeProposal: (status, execute) => {
-    // Add result message if there's execute info
+    const normalizedStatus = status === 'confirmed' || status === 'success' ? 'confirmed' : 'failed';
+
     if (execute) {
-      // Build explorer URL if we have a real tx_hash
-      const explorerUrl = execute.tx_hash 
-        ? `https://explorer.solana.com/tx/${execute.tx_hash}?cluster=devnet`
-        : undefined;
-      
+      const content =
+        normalizedStatus === 'confirmed'
+          ? `Transacción ejecutada exitosamente.${execute.tx_hash ? ` TX: ${execute.tx_hash.slice(0, 8)}...` : ''}`
+          : `Error en la transacción: ${execute.error || 'Error desconocido'}`;
       const resultMessage: AgentChatMessage = {
         id: id('agent'),
         role: 'agent',
         type: 'text',
-        content: status === 'success' 
-          ? `Transacción ejecutada exitosamente.${execute.tx_hash ? ` [Ver en Explorer](${explorerUrl})` : ''}`
-          : `Error en la transacción: ${execute.error || 'Error desconocido'}`,
+        content,
         execute,
         timestamp: new Date().toISOString(),
       };
+
       set((state) => ({
         messages: [...state.messages, resultMessage],
         pendingProposal: null,
-        proposalUiState: status === 'success' ? 'confirmed' : 'failed',
+        proposalUiState: normalizedStatus,
         status: 'idle',
       }));
-    } else {
-      set({
-        pendingProposal: null,
-        proposalUiState: status === 'success' ? 'confirmed' : 'failed',
-        status: 'idle',
-      });
+      return;
     }
+
+    set({
+      pendingProposal: null,
+      proposalUiState: normalizedStatus,
+      status: 'idle',
+    });
   },
 
   // Status actions

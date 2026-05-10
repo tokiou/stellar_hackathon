@@ -13,6 +13,10 @@ import {
   createSession,
   updateSession,
   clearPendingProposal,
+  type SessionState,
+  type PendingProposal,
+  type ProposalState,
+  type SolanaNetwork,
 } from './chatSessionStore';
 import {
   prepareTransferResult,
@@ -51,7 +55,13 @@ type ChatRequest =
   | {
       type: 'function_approve';
       session_id: string;
-      execute_tx_signature?: string;
+    }
+  | {
+      type: 'function_result';
+      session_id: string;
+      tx_signature: string;
+      status: 'submitted' | 'confirmed' | 'failed';
+      error_message?: string;
     }
   | {
       type: 'function_reject';
@@ -75,6 +85,12 @@ type AgentFunctionCallMessage = {
   function: {
     name: 'transfer' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
     params: TransferParams | ConditionalBuySolParams | OrcaSwapParams;
+  };
+  execution?: {
+    mode: 'phantom_sign_and_send' | 'phantom_execute_then_optional_backend_proof';
+    network: 'devnet' | 'mainnet-beta';
+    expires_at: string;
+    expected_user_address?: string;
   };
   display: {
     summary: string;
@@ -185,6 +201,9 @@ const ORCA_SWAP_TOOL: ResponsesToolDefinition = {
 
 const ALL_TOOLS = [TRANSFER_TOOL, CONDITIONAL_BUY_SOL_TOOL, ORCA_SWAP_TOOL];
 
+const DEFAULT_SOLANA_NETWORK: SolanaNetwork = 'devnet';
+const PROPOSAL_TTL_MS = 5 * 60 * 1000;
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -241,6 +260,43 @@ async function writeSSE(
   await writer.write(encoder.encode(sseEvent(event, data)));
 }
 
+function getProposalExpiry(): number {
+  return Date.now() + PROPOSAL_TTL_MS;
+}
+
+function isProposalExpired(proposal: PendingProposal): boolean {
+  return Date.now() > proposal.expiresAt;
+}
+
+function isProposalBlocking(proposal: PendingProposal): boolean {
+  return ['awaiting_approval', 'preparing_transaction', 'awaiting_signature', 'submitted', 'confirming'].includes(
+    proposal.state,
+  );
+}
+
+function normalizeChatError(err: unknown): { code: string; message: string } {
+  const rawMessage = err instanceof Error ? err.message : String(err || 'Unknown error');
+
+  if (rawMessage.includes('content_filter')) {
+    return {
+      code: 'content_filter',
+      message: 'El proveedor de IA bloqueó ese pedido. Probá reformularlo con monto, token y destinatario.',
+    };
+  }
+
+  if (rawMessage.includes('OPENAI_API_KEY')) {
+    return {
+      code: 'missing_api_key',
+      message: 'Falta configurar la API key del proveedor de IA.',
+    };
+  }
+
+  return {
+    code: 'stream_error',
+    message: 'No pude completar la respuesta. Probá de nuevo en unos segundos.',
+  };
+}
+
 function getSolanaConnection() {
   const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
   return new web3.Connection(rpcUrl, 'confirmed');
@@ -250,6 +306,8 @@ async function buildUnsignedSolTransferTx(params: {
   fromWallet: string;
   toWallet: string;
   amountSol: number;
+  recentBlockhash?: string;
+  lastValidBlockHeight?: number;
 }): Promise<{ txBase64: string; blockhash: string; lastValidBlockHeight: number }> {
   const connection = getSolanaConnection();
   const from = new web3.PublicKey(params.fromWallet);
@@ -262,7 +320,9 @@ async function buildUnsignedSolTransferTx(params: {
     lamports,
   });
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const { blockhash, lastValidBlockHeight } = params.recentBlockhash
+    ? { blockhash: params.recentBlockhash, lastValidBlockHeight: params.lastValidBlockHeight ?? 0 }
+    : await connection.getLatestBlockhash('confirmed');
 
   const msg = new web3.TransactionMessage({
     payerKey: from,
@@ -298,6 +358,8 @@ export async function proxyAgenticChat(body: unknown): Promise<Response> {
       return handleUserMessage(request);
     case 'function_approve':
       return handleFunctionApprove(request);
+    case 'function_result':
+      return handleFunctionResult(request);
     case 'function_reject':
       return handleFunctionReject(request);
     default:
@@ -367,12 +429,13 @@ async function handleUserMessage(request: {
         (o) => o.type === 'function_call' && (o.name === 'transfer' || o.name === 'conditional_buy_sol' || o.name === 'swap_orca_usdc_to_sol')
       );
 
-      if (toolCall && toolCall.name) {
+        if (toolCall && toolCall.name) {
         if (toolCall.name === 'transfer') {
           await handleTransferToolCall(
             { name: toolCall.name, arguments: toolCall.arguments },
             sessionId,
             session.userAddress,
+            session,
             writer,
             encoder,
             conversationInput,
@@ -382,6 +445,7 @@ async function handleUserMessage(request: {
           await handleConditionalBuyToolCall(
             { name: toolCall.name, arguments: toolCall.arguments },
             sessionId,
+            session,
             writer,
             encoder
           );
@@ -389,6 +453,7 @@ async function handleUserMessage(request: {
           await handleOrcaSwapToolCall(
             { name: toolCall.name, arguments: toolCall.arguments },
             sessionId,
+            session,
             writer,
             encoder
           );
@@ -408,10 +473,7 @@ async function handleUserMessage(request: {
       await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     } catch (err) {
       console.error('[chat] Stream error:', err);
-      await writeSSE(writer, encoder, 'error', {
-        code: 'stream_error',
-        message: err instanceof Error ? err.message : 'Unknown error',
-      });
+      await writeSSE(writer, encoder, 'error', normalizeChatError(err));
     } finally {
       try {
         await writer.close();
@@ -434,6 +496,7 @@ async function handleUserMessage(request: {
 async function handleOrcaSwapToolCall(
   toolCall: { name: string; arguments?: string },
   sessionId: string,
+  session: SessionState,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   encoder: TextEncoder
 ) {
@@ -461,10 +524,15 @@ async function handleOrcaSwapToolCall(
 
     updateSession(sessionId, {
       pendingProposal: {
+        proposalType: 'swap_orca_usdc_to_sol',
+        state: 'awaiting_approval',
         toolName: 'swap_orca_usdc_to_sol',
         toolArgs: { ...toolArgs, quote },
         toolResult: { status: 'prepared', reason: 'READY_FOR_ORCA_SWAP_APPROVAL' },
         createdAt: Date.now(),
+        expiresAt: getProposalExpiry(),
+        expectedUserAddress: session.userAddress,
+        network: DEFAULT_SOLANA_NETWORK,
       },
     });
 
@@ -503,9 +571,24 @@ async function handleOrcaSwapToolCall(
 async function handleConditionalBuyToolCall(
   toolCall: { name: string; arguments?: string },
   sessionId: string,
+  session: SessionState,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   encoder: TextEncoder
 ) {
+  const existingPendingProposal = session.pendingProposal;
+  if (existingPendingProposal && isProposalBlocking(existingPendingProposal) && !isProposalExpired(existingPendingProposal)) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'proposal_in_progress',
+      message: 'Ya existe una propuesta pendiente. Resuélvela antes de pedir otra.',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+  if (existingPendingProposal && isProposalExpired(existingPendingProposal)) {
+    clearPendingProposal(sessionId);
+  }
+
   let toolArgs: ConditionalBuySolParams;
   try {
     const parsed = JSON.parse(toolCall.arguments || '{}');
@@ -568,11 +651,19 @@ async function handleConditionalBuyToolCall(
         ...decision.reasons,
       ],
     },
+    execution: {
+      mode: 'phantom_execute_then_optional_backend_proof',
+      network: DEFAULT_SOLANA_NETWORK,
+      expires_at: new Date(getProposalExpiry()).toISOString(),
+      expected_user_address: session.userAddress ?? undefined,
+    },
     timestamp: now(),
   };
 
   updateSession(sessionId, {
     pendingProposal: {
+      proposalType: 'conditional_buy_sol',
+      state: 'awaiting_approval',
       toolName: 'conditional_buy_sol',
       toolArgs: {
         ...toolArgs,
@@ -584,6 +675,9 @@ async function handleConditionalBuyToolCall(
         reason: 'READY_FOR_ONCHAIN_ORACLE_APPROVAL',
       },
       createdAt: Date.now(),
+      expiresAt: getProposalExpiry(),
+      expectedUserAddress: session.userAddress,
+      network: DEFAULT_SOLANA_NETWORK,
     },
   });
 
@@ -601,11 +695,26 @@ async function handleTransferToolCall(
   toolCall: { name: string; arguments?: string },
   sessionId: string,
   userAddress: string | null,
+  session: SessionState,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   encoder: TextEncoder,
   conversationInput: string,
   systemInstruction: string
 ) {
+  const existingPendingProposal = session.pendingProposal;
+  if (existingPendingProposal && isProposalBlocking(existingPendingProposal) && !isProposalExpired(existingPendingProposal)) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'proposal_in_progress',
+      message: 'Ya existe una propuesta pendiente. Resuélvela antes de pedir otra.',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+  if (existingPendingProposal && isProposalExpired(existingPendingProposal)) {
+    clearPendingProposal(sessionId);
+  }
+
   // Parse tool arguments
   let toolArgs: TransferParams;
   try {
@@ -648,10 +757,15 @@ async function handleTransferToolCall(
     // Store pending proposal for HITL
     updateSession(sessionId, {
       pendingProposal: {
+        proposalType: 'transfer',
+        state: 'awaiting_approval',
         toolName: 'transfer',
         toolArgs,
         toolResult,
         createdAt: Date.now(),
+        expiresAt: getProposalExpiry(),
+        expectedUserAddress: userAddress,
+        network: DEFAULT_SOLANA_NETWORK,
       },
     });
 
@@ -659,13 +773,19 @@ async function handleTransferToolCall(
 
     // Build proposal message
     const proposal: AgentFunctionCallMessage = {
-      type: 'function_call',
-      function: {
+    type: 'function_call',
+    function: {
         name: 'transfer',
         params: toolArgs,
       },
       display,
       risk,
+      execution: {
+        mode: 'phantom_sign_and_send',
+        network: DEFAULT_SOLANA_NETWORK,
+        expires_at: new Date(getProposalExpiry()).toISOString(),
+        expected_user_address: userAddress ?? undefined,
+      },
       timestamp: now(),
     };
 
@@ -741,7 +861,6 @@ async function streamResponseToSSE(
 async function handleFunctionApprove(request: {
   type: 'function_approve';
   session_id: string;
-  execute_tx_signature?: string;
 }): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
@@ -756,51 +875,57 @@ async function handleFunctionApprove(request: {
     return jsonResponse({ error: { code: 'no_pending_proposal', message: 'No pending proposal for this session' } }, { status: 400 });
   }
 
-  const { toolArgs, toolName } = session.pendingProposal;
-  clearPendingProposal(request.session_id);
+  const pendingProposal = session.pendingProposal;
+  if (isProposalExpired(pendingProposal)) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse({ error: { code: 'proposal_expired', message: 'Pending proposal expired' } }, { status: 400 });
+  }
+
+  const { toolArgs, toolName, expectedUserAddress } = pendingProposal;
+  if (pendingProposal.state !== 'awaiting_approval' && pendingProposal.state !== 'failed') {
+    return jsonResponse(
+      { error: { code: 'proposal_state_conflict', message: `Cannot approve proposal in state ${pendingProposal.state}` } },
+      { status: 400 }
+    );
+  }
+
+  const preparedProposal = {
+    ...pendingProposal,
+    state: 'preparing_transaction' as ProposalState,
+  };
+  updateSession(request.session_id, { pendingProposal: preparedProposal });
+  const proposal = getSession(request.session_id)?.pendingProposal;
+  if (!proposal) {
+    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found while preparing proposal' } }, { status: 404 });
+  }
 
   console.log(`[chat] Proposal approved: ${request.session_id}`);
 
   if (toolName === 'conditional_buy_sol') {
-    if (!request.execute_tx_signature) {
-      return jsonResponse(
-        {
-          error: {
-            code: 'missing_onchain_proof',
-            message: 'execute_tx_signature is required for oracle-gated conditional buy',
-          },
-        },
-        { status: 400 }
-      );
-    }
-
-    const proof = await verifyOracleExecutionTx({ execute_tx_signature: request.execute_tx_signature });
-    if (!proof.ok) {
-      return jsonResponse(
-        {
-          error: {
-            code: 'onchain_oracle_validation_failed',
-            message: proof.reason || 'On-chain oracle validation failed',
-          },
-        },
-        { status: 400 }
-      );
-    }
-
     const buyArgs = toolArgs as ConditionalBuySolParams;
-    const response: { messages: AgentMessage[] } = {
+    const response: {
+      messages: AgentMessage[];
+      proposal_state: { state: 'awaiting_signature'; expires_at: string };
+    } = {
       messages: [
         {
           type: 'text',
-          content: `Aprobación on-chain validada. Compra condicional ejecutada (simulada): ${buyArgs.input_amount} USDC para SOL con target ${buyArgs.target_price_usd} USD.`,
-          execute: {
-            status: 'success',
-            tx_hash: request.execute_tx_signature,
-          },
+          content: `Aprobación recibida para compra condicional (${buyArgs.input_amount} USDC, target ${buyArgs.target_price_usd} USD). Ejecuta la operación en Phantom y envía tx_signature para completarla.`,
           timestamp: now(),
         },
       ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: proposal.expiresAt ? new Date(proposal.expiresAt).toISOString() : now(),
+      },
     };
+
+    updateSession(request.session_id, {
+      pendingProposal: {
+        ...proposal,
+        state: 'awaiting_signature',
+      },
+    });
     return jsonResponse(response, { status: 200 });
   }
 
@@ -865,6 +990,7 @@ async function handleFunctionApprove(request: {
 
   const transferArgs = toolArgs as TransferParams;
   if (!session.userAddress) {
+    clearPendingProposal(request.session_id);
     return jsonResponse(
       { error: { code: 'no_wallet', message: 'No wallet connected in session' } },
       { status: 400 }
@@ -877,8 +1003,16 @@ async function handleFunctionApprove(request: {
       fromWallet: session.userAddress,
       toWallet: transferArgs.recipient,
       amountSol: transferArgs.amount,
+      recentBlockhash: proposal.recentBlockhash,
+      lastValidBlockHeight: proposal.lastValidBlockHeight,
     });
   } catch (e) {
+    updateSession(request.session_id, {
+      pendingProposal: {
+        ...proposal,
+        state: 'failed',
+      },
+    });
     return jsonResponse(
       {
         error: {
@@ -894,21 +1028,148 @@ async function handleFunctionApprove(request: {
 
   // Note: We don't set execute.status here because the transaction hasn't been signed/sent yet.
   // The frontend will sign, send, and set the real status + tx_hash.
-  const response = {
+  const response: { messages: AgentMessage[] } = {
     messages: [
       {
         type: 'text',
-        content: `Transferencia preparada: ${transferArgs.amount} ${transferArgs.token || 'SOL'} → ${shortRecipient}. Firma en tu wallet para ejecutar.`,
+        content: `Transacción preparada. Revisa y firma en tu wallet para enviar ${transferArgs.amount} ${transferArgs.token || 'SOL'} a ${shortRecipient}.`,
         timestamp: now(),
       },
     ],
+  };
+
+  if (expectedUserAddress && expectedUserAddress !== session.userAddress) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse(
+      {
+        error: {
+          code: 'wallet_mismatch',
+          message: 'Connected wallet does not match expected wallet for this proposal.',
+        },
+      },
+      { status: 400 }
+    );
+  }
+
+  const responseData: {
+    messages: AgentMessage[];
+    proposal_state: { state: 'awaiting_signature'; expires_at: string };
+    transaction?: {
+      format: 'base64_versioned_transaction';
+      unsigned_tx_base64: string;
+      recent_blockhash: string;
+      last_valid_block_height: number;
+      network: 'devnet' | 'mainnet-beta';
+    };
+  } = {
+    ...response,
+    proposal_state: {
+      state: 'awaiting_signature',
+      expires_at: new Date(proposal.expiresAt).toISOString(),
+    },
     transaction: {
       format: 'base64_versioned_transaction',
       unsigned_tx_base64: unsignedTx.txBase64,
       recent_blockhash: unsignedTx.blockhash,
       last_valid_block_height: unsignedTx.lastValidBlockHeight,
-      network: 'devnet',
+      network: proposal.network,
     },
+  };
+
+  updateSession(request.session_id, {
+    pendingProposal: {
+      ...proposal,
+      state: 'awaiting_signature',
+      recentBlockhash: unsignedTx.blockhash,
+      lastValidBlockHeight: unsignedTx.lastValidBlockHeight,
+    },
+  });
+
+  return jsonResponse(responseData, { status: 200 });
+}
+
+// ============================================================================
+// Function Result Handler (JSON)
+// ============================================================================
+
+async function handleFunctionResult(request: {
+  type: 'function_result';
+  session_id: string;
+  tx_signature: string;
+  status: 'submitted' | 'confirmed' | 'failed';
+  error_message?: string;
+}): Promise<Response> {
+  if (!request.session_id?.trim()) {
+    return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
+  }
+
+  const session = getSession(request.session_id);
+  if (!session) {
+    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+  }
+
+  if (!session.pendingProposal) {
+    return jsonResponse({ error: { code: 'no_pending_proposal', message: 'No pending proposal for this session' } }, { status: 400 });
+  }
+
+  const pendingProposal = session.pendingProposal;
+  if (pendingProposal.toolName === 'conditional_buy_sol' && request.status === 'confirmed') {
+    const proof = await verifyOracleExecutionTx({
+      execute_tx_signature: request.tx_signature,
+      expected_signer: pendingProposal.expectedUserAddress || session.userAddress || undefined,
+      expected_network: pendingProposal.network,
+    });
+
+    if (!proof.ok) {
+      updateSession(request.session_id, {
+        pendingProposal: {
+          ...pendingProposal,
+          state: 'failed',
+          txSignature: request.tx_signature,
+        },
+      });
+
+      return jsonResponse(
+        {
+          error: {
+            code: 'onchain_verification_failed',
+            message: proof.reason || 'On-chain verification failed',
+          },
+        },
+        { status: 400 }
+      );
+    }
+  }
+
+  const statusToPersist = request.status === 'failed' ? 'failed' : request.status === 'confirmed' ? 'confirmed' : 'submitted';
+  if (request.status === 'confirmed') {
+    clearPendingProposal(request.session_id);
+  } else {
+    updateSession(request.session_id, {
+      pendingProposal: {
+        ...pendingProposal,
+        state: request.status === 'submitted' ? 'submitted' : 'failed',
+        txSignature: request.tx_signature,
+      },
+    });
+  }
+
+  const response: { messages: AgentMessage[] } = {
+    messages: [
+      {
+        type: 'text',
+        content:
+          statusToPersist === 'failed'
+            ? `Error en el resultado de ejecución: ${request.error_message || 'No se pudo completar.'}`
+            : `Resultado registrado para la transacción (${request.status}).`,
+        execute: {
+          status: request.status === 'confirmed' || request.status === 'submitted' ? 'success' : 'failed',
+          tx_hash: request.tx_signature,
+          error: request.error_message,
+        },
+        timestamp: now(),
+      },
+    ],
   };
 
   return jsonResponse(response, { status: 200 });

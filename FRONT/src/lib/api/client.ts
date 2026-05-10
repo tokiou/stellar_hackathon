@@ -1,5 +1,6 @@
 import type {
   AgentMessage,
+  AgentMessageResponse as AgentMessageResponseType,
   ApiError,
   GetAllocationResponse,
   GetBalancesResponse,
@@ -10,6 +11,7 @@ import type {
 } from '@/types/api';
 import {
   AgentMessageResponseSchema,
+  FunctionApproveResponseSchema,
   ApiErrorSchema,
   GetAllocationResponseSchema,
   GetBalancesResponseSchema,
@@ -103,6 +105,13 @@ export type ChatRequest =
   | {
       type: 'function_approve';
       session_id: string;
+    }
+  | {
+      type: 'function_result';
+      session_id: string;
+      tx_signature: string;
+      status: 'submitted' | 'confirmed' | 'failed';
+      error_message?: string;
     }
   | {
       type: 'function_reject';
@@ -248,6 +257,22 @@ export type TransactionPayload = {
   execution_type?: string;
 };
 
+export type ApproveResponse = {
+  messages: AgentMessage[];
+  proposal_state?: {
+    state: 'awaiting_signature';
+    expires_at: string;
+  };
+  transaction?: TransactionPayload;
+  swap_execution?: {
+    provider: string;
+    pair: string;
+    input_amount: number;
+    slippage_bps: number;
+    quote: unknown;
+  };
+};
+
 export type AgentMessageResponse = {
   messages: AgentMessage[];
   transaction?: TransactionPayload;
@@ -263,12 +288,12 @@ export type AgentMessageResponse = {
 /**
  * Approve a pending proposal (JSON response)
  */
-export function postApprove(sessionId: string, executeTxSignature?: string): Promise<AgentMessageResponse> {
+export function postApprove(sessionId: string): Promise<ApproveResponse> {
   return postJson(
     '/api/chat',
-    { type: 'function_approve', session_id: sessionId, execute_tx_signature: executeTxSignature },
-    AgentMessageResponseSchema
-  ) as Promise<AgentMessageResponse>;
+    { type: 'function_approve', session_id: sessionId },
+    FunctionApproveResponseSchema
+  ) as Promise<ApproveResponse>;
 }
 
 /**
@@ -280,6 +305,25 @@ export function postReject(sessionId: string, reason?: string): Promise<AgentMes
     { type: 'function_reject', session_id: sessionId, reason },
     AgentMessageResponseSchema
   ) as Promise<AgentMessageResponse>;
+}
+
+export function postFunctionResult(
+  sessionId: string,
+  txSignature: string,
+  status: 'submitted' | 'confirmed' | 'failed',
+  errorMessage?: string,
+): Promise<AgentMessageResponseType> {
+  return postJson(
+    '/api/chat',
+    {
+      type: 'function_result',
+      session_id: sessionId,
+      tx_signature: txSignature,
+      status,
+      error_message: errorMessage,
+    },
+    AgentMessageResponseSchema
+  ) as Promise<AgentMessageResponseType>;
 }
 
 // ============================================================================

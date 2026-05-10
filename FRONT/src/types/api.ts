@@ -19,7 +19,7 @@ export type RiskInfo = {
 };
 
 export type ExecuteInfo = {
-  status: 'success' | 'failed';
+  status: 'submitted' | 'confirmed' | 'failed' | 'success';
   tx_hash?: string;
   error?: string;
 };
@@ -45,6 +45,20 @@ export type TransferParams = {
   memo?: string;
 };
 
+export type ConditionalBuySolParams = {
+  input_token: 'USDC';
+  input_amount: number;
+  target_price_usd: number;
+  min_sol_out?: number;
+};
+
+export type FunctionExecution = {
+  mode: 'phantom_sign_and_send' | 'phantom_execute_then_optional_backend_proof';
+  network: 'devnet' | 'mainnet-beta';
+  expires_at: string;
+  expected_user_address?: string;
+};
+
 export type StakeParams = {
   amount: number;
   validator: string;
@@ -60,8 +74,8 @@ export type AgentMessage =
   | {
       type: 'function_call';
       function: {
-        name: 'swap' | 'transfer' | 'stake' | 'swap_orca_usdc_to_sol';
-        params: SwapParams | TransferParams | StakeParams | OrcaSwapParams;
+        name: 'swap' | 'transfer' | 'stake' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
+        params: SwapParams | TransferParams | StakeParams | ConditionalBuySolParams | OrcaSwapParams;
       };
       display: {
         summary: string;
@@ -70,6 +84,7 @@ export type AgentMessage =
         slippage_bps?: number;
       };
       risk: RiskInfo;
+      execution?: FunctionExecution;
       timestamp: string;
     }
   | {
@@ -81,11 +96,23 @@ export type AgentMessage =
 
 export type AgentMessageRequest =
   | { type: 'user_message'; content: string; session_id?: string; user_address?: string; user_threshold_usd?: number }
-  | { type: 'function_approve'; session_id: string; execute_tx_signature?: string }
+  | { type: 'function_approve'; session_id: string }
+  | { type: 'function_result'; session_id: string; tx_signature: string; status: 'submitted' | 'confirmed' | 'failed'; error_message?: string }
   | { type: 'function_reject'; session_id: string; reason?: string };
 
 export type AgentMessageResponse = {
   messages: AgentMessage[];
+  proposal_state?: {
+    state: 'awaiting_signature';
+    expires_at: string;
+  };
+  transaction?: {
+    format: 'base64_versioned_transaction';
+    unsigned_tx_base64: string;
+    recent_blockhash: string;
+    last_valid_block_height: number;
+    network: 'devnet' | 'mainnet-beta';
+  };
 };
 
 export type GetBalancesQuery = {
@@ -95,7 +122,7 @@ export type GetBalancesQuery = {
 export type GetBalancesResponse = {
   balances: TokenBalance[];
   total_usd: number;
-  change_24h_pct: number;
+  change_24h_pct?: number;
   updated_at: string;
 };
 

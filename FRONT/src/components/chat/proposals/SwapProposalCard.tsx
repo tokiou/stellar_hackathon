@@ -16,7 +16,11 @@ export function SwapProposalCard({ proposal }: { proposal: PendingProposal }) {
     : (params as SwapParams).token_out;
   const { approveProposal, rejectProposal } = useAgentMessage();
   const uiState = useChatStore((state) => state.proposalUiState) ?? proposal.uiState;
-  const busy = uiState === 'awaiting_execution';
+  const busy =
+    uiState === 'preparing_transaction' ||
+    uiState === 'awaiting_signature' ||
+    uiState === 'submitted' ||
+    uiState === 'confirming';
   const done = uiState === 'confirmed';
   const failed = uiState === 'failed';
   const cancelled = uiState === 'cancelled';
