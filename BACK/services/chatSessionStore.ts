@@ -20,6 +20,7 @@ export type SessionFunctionExecution = {
   network: 'devnet' | 'mainnet-beta';
   expires_at: string;
   expected_user_address?: string;
+  proposal_token?: string;
 };
 
 export type SessionFunctionMessage = {

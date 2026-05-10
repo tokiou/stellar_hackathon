@@ -69,7 +69,7 @@ import {
 import { web3 } from '@coral-xyz/anchor';
 import { fetchWalletHoldings } from './walletHoldings';
 import { getUsdcSolQuote } from './priceQuote';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 // ============================================================================
@@ -92,6 +92,7 @@ type ChatRequest =
       type: 'function_approve';
       session_id: string;
       action_hash?: string;
+      proposal_token?: string;
     }
   | {
       type: 'function_result';
@@ -128,6 +129,7 @@ type AgentFunctionCallMessage = {
     network: 'devnet' | 'mainnet-beta';
     expires_at: string;
     expected_user_address?: string;
+    proposal_token?: string;
   };
   display: {
     summary: string;
@@ -363,6 +365,7 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsi
 const USER_POLICY_ACCOUNT_SPACE = 8 + 32 + 8 + 8 + 2 + 1 + 1 + 1 + 1;
 const ACTION_APPROVAL_ACCOUNT_SPACE = 8 + 32 + 32 + 32 + 1 + 8 + 8 + 2 + 32 + 8 + 32 + 8 + 1 + 1 + 1;
 const SOL_TRANSFER_FEE_BUFFER_LAMPORTS = 50_000;
+const PROPOSAL_TOKEN_VERSION = 1;
 
 // ============================================================================
 // Helpers
@@ -437,6 +440,82 @@ async function writeSSE(
 
 function getProposalExpiry(): number {
   return Date.now() + PROPOSAL_TTL_MS;
+}
+
+type ProposalResumeTokenPayload = {
+  v: typeof PROPOSAL_TOKEN_VERSION;
+  sessionId: string;
+  pendingProposal: PendingProposal;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+function getProposalTokenSecret(): string {
+  const secret = process.env.CHAT_SESSION_SECRET?.trim() || process.env.NEXTAUTH_SECRET?.trim() || getEnv('OPENAI_API_KEY');
+  if (!secret) {
+    throw new Error('CHAT_SESSION_SECRET or OPENAI_API_KEY is required for proposal tokens');
+  }
+  return secret;
+}
+
+function signProposalPayload(payload: string): string {
+  return createHmac('sha256', getProposalTokenSecret()).update(payload).digest('base64url');
+}
+
+function createProposalResumeToken(sessionId: string, pendingProposal: PendingProposal): string {
+  const payload: ProposalResumeTokenPayload = {
+    v: PROPOSAL_TOKEN_VERSION,
+    sessionId,
+    pendingProposal,
+    issuedAt: Date.now(),
+    expiresAt: Math.min(pendingProposal.expiresAt, Date.now() + PROPOSAL_TTL_MS),
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = signProposalPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyProposalResumeToken(sessionId: string, token: string | undefined): PendingProposal | null {
+  if (!token) return null;
+  const [encodedPayload, signature, extra] = token.split('.');
+  if (!encodedPayload || !signature || extra !== undefined) return null;
+
+  const expectedSignature = signProposalPayload(encodedPayload);
+  const received = Buffer.from(signature, 'base64url');
+  const expected = Buffer.from(expectedSignature, 'base64url');
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    return null;
+  }
+
+  let payload: ProposalResumeTokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as ProposalResumeTokenPayload;
+  } catch {
+    return null;
+  }
+
+  if (payload.v !== PROPOSAL_TOKEN_VERSION || payload.sessionId !== sessionId) return null;
+  if (!payload.pendingProposal || payload.expiresAt <= Date.now() || payload.pendingProposal.expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return payload.pendingProposal;
+}
+
+function restoreSessionFromProposalToken(sessionId: string, token: string | undefined): SessionState | null {
+  const pendingProposal = verifyProposalResumeToken(sessionId, token);
+  if (!pendingProposal) return null;
+
+  const restored = createSession(sessionId, sessionId, pendingProposal.expectedUserAddress ?? undefined);
+  updateSession(sessionId, {
+    userAddress: pendingProposal.expectedUserAddress,
+    pendingProposal: {
+      ...pendingProposal,
+      state: pendingProposal.state === 'preparing_transaction' ? 'awaiting_approval' : pendingProposal.state,
+    },
+    messages: pendingProposal.proposalMessage ? [pendingProposal.proposalMessage] : [],
+  });
+  return getSession(restored.sessionId);
 }
 
 function toHistoryPrompt(messages: SessionHistoryMessage[]): string {
@@ -2049,53 +2128,50 @@ async function handleTransferToolCall(
     safety.decisionResult
   );
 
-  updateSession(sessionId, {
-    pendingProposal: {
-      proposalType: 'transfer',
-      state: 'awaiting_approval',
-      toolName: 'transfer',
-      toolArgs: {
-        amount: canonical.amount,
-        token: canonical.token,
-        recipient: canonical.recipient,
-        memo: canonical.memo,
-      },
-      toolResult: {
-        ...toolResult,
-        walletSafety: safety.decisionResult,
-        onchainGuard: {
-          actionType: actionMetadata.actionType,
-          actionHash,
-          policyPda: actionMetadata.policyPda,
-          actionApprovalPda,
-          walletSafetyAttestationPda,
-          actionExpiresAt: actionMetadata.actionExpiresAt,
-          actionCreatedAt: actionMetadata.actionCreatedAt,
-        },
-      },
-      createdAt: proposalCreatedAt,
-      expiresAt: getProposalExpiry(),
-      expectedUserAddress: userAddress,
-      network: DEFAULT_SOLANA_NETWORK,
-      actionHash,
-      actionExpiry: safety.actionExpiry,
-      policyPda,
-      actionApprovalPda,
-      walletSafetyAttestationPda,
-      actionType: actionMetadata.actionType,
-      actionCreatedAt: actionMetadata.actionCreatedAt,
-      actionExpiresAt: actionMetadata.actionExpiresAt,
-    },
-  });
-
-  console.log(`[chat] Proposal created: ${sessionId} - transfer ${canonical.amount} ${canonical.token}`);
-
+  const proposalExpiresAt = getProposalExpiry();
   const display = generateTransferDisplay({
     amount: canonical.amount,
     token: canonical.token,
     recipient: canonical.recipient,
     memo: canonical.memo,
   });
+  const pendingProposal: PendingProposal = {
+    proposalType: 'transfer',
+    state: 'awaiting_approval',
+    toolName: 'transfer',
+    toolArgs: {
+      amount: canonical.amount,
+      token: canonical.token,
+      recipient: canonical.recipient,
+      memo: canonical.memo,
+    },
+    toolResult: {
+      ...toolResult,
+      walletSafety: safety.decisionResult,
+      onchainGuard: {
+        actionType: actionMetadata.actionType,
+        actionHash,
+        policyPda: actionMetadata.policyPda,
+        actionApprovalPda,
+        walletSafetyAttestationPda,
+        actionExpiresAt: actionMetadata.actionExpiresAt,
+        actionCreatedAt: actionMetadata.actionCreatedAt,
+      },
+    },
+    createdAt: proposalCreatedAt,
+    expiresAt: proposalExpiresAt,
+    expectedUserAddress: userAddress,
+    network: DEFAULT_SOLANA_NETWORK,
+    actionHash,
+    actionExpiry: safety.actionExpiry,
+    policyPda,
+    actionApprovalPda,
+    walletSafetyAttestationPda,
+    actionType: actionMetadata.actionType,
+    actionCreatedAt: actionMetadata.actionCreatedAt,
+    actionExpiresAt: actionMetadata.actionExpiresAt,
+  };
+  const proposalToken = createProposalResumeToken(sessionId, pendingProposal);
 
   const proposal: AgentFunctionCallMessage = {
     type: 'function_call',
@@ -2117,8 +2193,9 @@ async function handleTransferToolCall(
     execution: {
       mode: 'phantom_sign_and_send',
       network: DEFAULT_SOLANA_NETWORK,
-      expires_at: new Date(getProposalExpiry()).toISOString(),
+      expires_at: new Date(proposalExpiresAt).toISOString(),
       expected_user_address: userAddress,
+      proposal_token: proposalToken,
     },
     onchain_guardrail: {
       action_type: actionMetadata.actionType,
@@ -2133,6 +2210,16 @@ async function handleTransferToolCall(
     },
     timestamp: now(),
   };
+  const sessionProposalMessage = proposalMessageFromFunctionCall(proposal);
+  updateSession(sessionId, {
+    pendingProposal: {
+      ...pendingProposal,
+      proposalMessage: sessionProposalMessage,
+    },
+  });
+  appendSessionMessage(sessionId, sessionProposalMessage);
+
+  console.log(`[chat] Proposal created: ${sessionId} - transfer ${canonical.amount} ${canonical.token}`);
 
   await writeSSE(writer, encoder, 'proposal', proposal);
   await writeSSE(writer, encoder, 'done', { session_id: sessionId, awaiting_approval: true });

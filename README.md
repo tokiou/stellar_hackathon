@@ -235,6 +235,27 @@ No poner secrets en `FRONT/`.
 
 ---
 
+## Contract deployment addresses
+
+Devnet contracts and on-chain accounts used by the current demo deployment:
+
+| Name | Network | Address |
+| --- | --- | --- |
+| AgentActionGuard program | devnet | `4K9mRmHmbFGgDN8Luhx5hPRHwuEZ5kQm2VNpMUr1gaBV` |
+| AgentActionGuard attestor config PDA | devnet | `AZuL6voaDa58HHx9Pw7goWRmQxndehkwQsvV8Hbz9huM` |
+| Wallet safety attestor authority | devnet | `7sSydc547d2fZ4FMbJVezSVjXK1btAjwU9H2wDWjeKnW` |
+| ConditionalEscrowBuy program | devnet | `FDwvY7eqeCNn27haATZJbqfnACJTr9YveG6yy9RcUt7u` |
+| devUSDC mint (`USDC_TEST_MINT`) | devnet | `BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k` |
+| Treasury devUSDC ATA (`TREASURY_USDC_ATA`) | devnet | `36o9VaNwtfWiAJGfYKao3ZbxmFAye8brMjLEhE4Jv1TC` |
+| Pyth SOL/USD feed (`PYTH_SOL_USD_FEED`) | devnet | `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE` |
+| Orca SOL/devUSDC Whirlpool pool | devnet | `3KBZiL2g8C7tiJ32hTv5v3KM7aK9htpqTw4cTXz1HvPt` |
+| SPL Token program | devnet | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+| Associated Token program | devnet | `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL` |
+
+No mainnet contract deployment is configured for this demo.
+
+---
+
 ## Scripts
 
 Instalar dependencias:

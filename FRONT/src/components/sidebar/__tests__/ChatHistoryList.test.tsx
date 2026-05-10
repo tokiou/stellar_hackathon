@@ -41,7 +41,7 @@ describe('ChatHistoryList', () => {
   it('shows persisted conversations and changes active conversation on select', () => {
     const state = useChatStore.getState();
     state.startNewConversation('wallet-1');
-    const firstConversationId = state.activeConversationId;
+    const firstConversationId = useChatStore.getState().activeConversationId;
     state.addUserMessage('Primera conversación');
 
     state.startNewConversation('wallet-1');
@@ -51,14 +51,7 @@ describe('ChatHistoryList', () => {
 
     const openConversationButtons = screen.getAllByRole('button', { name: /Open conversation/ });
     expect(openConversationButtons.length).toBeGreaterThanOrEqual(2);
-    const visibleOpenButtons = screen.getAllByRole('button', { name: /Open conversation/ });
-    const orderedConversations = useChatStore.getState().getConversationList();
-    const firstConversationIndex = orderedConversations.findIndex(
-      (conversation) => conversation.id === firstConversationId
-    );
-    expect(firstConversationIndex).toBeGreaterThanOrEqual(0);
-    const targetConversationIndex = firstConversationIndex;
-    fireEvent.click(visibleOpenButtons[targetConversationIndex]);
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation Primera conversación' }));
 
     expect(useChatStore.getState().activeConversationId).toBe(firstConversationId);
   });

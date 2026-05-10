@@ -17,6 +17,9 @@ type SignAndSendError = Error & {
   code?: string;
 };
 
+const hydratedSessionIds = new Set<string>();
+const hydratingSessionIds = new Set<string>();
+
 function getApprovalFailureMessage(error: unknown): string {
   if (error instanceof ApiClientError) {
     const messages: Record<string, string> = {
@@ -73,15 +76,21 @@ export function useAgentMessage() {
   const hydrateSession = useCallback(async () => {
     const sessionId = useChatStore.getState().sessionId;
     if (!sessionId) return;
+    if (hydratedSessionIds.has(sessionId) || hydratingSessionIds.has(sessionId)) return;
+    hydratingSessionIds.add(sessionId);
     try {
       const history = await getHistory(sessionId);
       hydrateSessionHistory(history.session_id, history.messages, history.pending_proposal);
+      hydratedSessionIds.add(sessionId);
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'session_not_found') {
+        hydratedSessionIds.delete(sessionId);
         clearSessionData();
       } else {
         console.error('[chat] Failed to hydrate session history:', error);
       }
+    } finally {
+      hydratingSessionIds.delete(sessionId);
     }
   }, [clearSessionData, hydrateSessionHistory]);
 
