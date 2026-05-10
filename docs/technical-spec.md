@@ -1,8 +1,8 @@
 # Especificación Técnica — Conexión Directa con Phantom Wallet
 
-**Versión:** 1.0  
-**Fecha:** 2026-05-09  
-**Estado:** Draft para implementación  
+**Versión:** 1.0
+**Fecha:** 2026-05-09
+**Estado:** Draft para implementación
 
 ---
 
@@ -114,13 +114,13 @@ type PhantomProvider = {
 
 function getPhantomProvider(): PhantomProvider | null {
   if (typeof window === 'undefined') return null;
-  
+
   const provider = (window as any).phantom?.solana;
-  
+
   if (provider?.isPhantom) {
     return provider;
   }
-  
+
   return null;
 }
 
@@ -128,23 +128,23 @@ export function useWallet() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [address, setAddress] = useState<string | undefined>(undefined);
   const [walletError, setWalletError] = useState<string | undefined>(undefined);
-  
+
   const balancesQuery = useWalletBalances(address);
-  
+
   const connect = useCallback(async () => {
     setIsConnecting(true);
     setWalletError(undefined);
-    
+
     try {
       const provider = getPhantomProvider();
-      
+
       if (!provider) {
         throw new Error('Phantom wallet not detected. Please install it from https://phantom.app/download');
       }
-      
+
       const response = await provider.connect();
       const publicKey = response.publicKey.toString();
-      
+
       setAddress(publicKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to connect to Phantom';
@@ -154,17 +154,17 @@ export function useWallet() {
       setIsConnecting(false);
     }
   }, []);
-  
+
   const disconnect = useCallback(async () => {
     setWalletError(undefined);
-    
+
     try {
       const provider = getPhantomProvider();
-      
+
       if (provider) {
         await provider.disconnect();
       }
-      
+
       setAddress(undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to disconnect';
@@ -172,13 +172,13 @@ export function useWallet() {
       console.error('[useWallet] disconnect error:', error);
     }
   }, []);
-  
+
   // Event listeners para cambios de cuenta y desconexión
   useEffect(() => {
     const provider = getPhantomProvider();
-    
+
     if (!provider) return;
-    
+
     const handleAccountChanged = (publicKey: { toString: () => string } | null) => {
       if (publicKey) {
         setAddress(publicKey.toString());
@@ -186,14 +186,14 @@ export function useWallet() {
         setAddress(undefined);
       }
     };
-    
+
     const handleDisconnect = () => {
       setAddress(undefined);
     };
-    
+
     provider.on('accountChanged', handleAccountChanged);
     provider.on('disconnect', handleDisconnect);
-    
+
     // Auto-connect si ya estaba conectado anteriormente
     if (provider.isConnected) {
       provider.connect({ onlyIfTrusted: true })
@@ -204,13 +204,13 @@ export function useWallet() {
           console.info('[useWallet] auto-connect skipped:', error.message);
         });
     }
-    
+
     return () => {
       provider.off('accountChanged', handleAccountChanged);
       provider.off('disconnect', handleDisconnect);
     };
   }, []);
-  
+
   return {
     isConnected: Boolean(address),
     isConnecting,
@@ -404,7 +404,7 @@ import { useWallet } from '../useWallet';
 describe('useWallet', () => {
   it('should detect missing Phantom provider', async () => {
     const { result } = renderHook(() => useWallet());
-    
+
     await act(async () => {
       try {
         await result.current.connect();
@@ -412,10 +412,10 @@ describe('useWallet', () => {
         // Expected
       }
     });
-    
+
     expect(result.current.walletError).toContain('not detected');
   });
-  
+
   // Más tests con mock de window.phantom...
 });
 ```
@@ -445,18 +445,18 @@ export interface PhantomProvider {
   isPhantom?: boolean;
   isConnected?: boolean;
   publicKey?: { toString: () => string };
-  
+
   connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: { toString: () => string } }>;
   disconnect(): Promise<void>;
-  
+
   signTransaction(transaction: any): Promise<any>;
   signAllTransactions(transactions: any[]): Promise<any[]>;
   signMessage(message: Uint8Array, encoding?: 'utf8'): Promise<{ signature: Uint8Array }>;
-  
+
   on(event: 'connect', handler: (publicKey: { toString: () => string }) => void): void;
   on(event: 'disconnect', handler: () => void): void;
   on(event: 'accountChanged', handler: (publicKey: { toString: () => string } | null) => void): void;
-  
+
   off(event: string, handler: (...args: any[]) => void): void;
 }
 
@@ -484,13 +484,13 @@ export {};
 ```typescript
 function getPhantomProvider(): PhantomProvider | null {
   const provider = window.phantom?.solana;
-  
+
   // Verificar flag isPhantom
   if (provider?.isPhantom !== true) {
     console.warn('[useWallet] Provider is not genuine Phantom');
     return null;
   }
-  
+
   return provider;
 }
 ```

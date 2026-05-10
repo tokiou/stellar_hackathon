@@ -108,7 +108,7 @@ export function useWallet() {
 
     try {
       const provider = getPhantomProvider();
-      
+
       if (!provider) {
         throw new Error('Phantom wallet not detected. Please install Phantom from https://phantom.app/download');
       }
@@ -130,11 +130,11 @@ export function useWallet() {
   const disconnect = useCallback(async () => {
     try {
       const provider = getPhantomProvider();
-      
+
       if (provider) {
         await provider.disconnect();
       }
-      
+
       updateWalletState({
         isConnected: false,
         address: undefined,

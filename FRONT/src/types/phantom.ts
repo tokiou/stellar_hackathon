@@ -10,10 +10,10 @@ export interface PhantomPublicKey {
 export interface PhantomProvider {
   /** Identifies the provider as Phantom */
   isPhantom: boolean;
-  
+
   /** The public key of the connected account */
   publicKey: PhantomPublicKey | null;
-  
+
   /** Check if wallet is connected */
   isConnected: boolean;
 
@@ -108,7 +108,7 @@ export function getPhantomProvider(): PhantomProvider | null {
   }
 
   const provider = window.phantom?.solana;
-  
+
   if (provider?.isPhantom) {
     return provider;
   }

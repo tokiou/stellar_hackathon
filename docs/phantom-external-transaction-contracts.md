@@ -1,8 +1,8 @@
 # Contratos de transacciones para Phantom externa
 
-**Estado:** draft de arquitectura / contratos  
-**Fecha:** 2026-05-09  
-**Alcance:** solo transacciones. No cubre balances, portfolio, historial ni UI de login salvo lo necesario para firmar.  
+**Estado:** draft de arquitectura / contratos
+**Fecha:** 2026-05-09
+**Alcance:** solo transacciones. No cubre balances, portfolio, historial ni UI de login salvo lo necesario para firmar.
 **Motivo:** documento extra al fix de login para explicar qué contratos deben cambiar al dejar Phantom Embedded Wallet.
 
 ---

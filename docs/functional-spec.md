@@ -1,8 +1,8 @@
 # Especificación Funcional — Conexión Directa con Phantom Wallet
 
-**Versión:** 1.0  
-**Fecha:** 2026-05-09  
-**Estado:** Draft para revisión  
+**Versión:** 1.0
+**Fecha:** 2026-05-09
+**Estado:** Draft para revisión
 
 ---
 
