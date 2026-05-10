@@ -7,6 +7,7 @@ import {
   ConditionalBuySolParamsSchema,
   TransactionPayloadSchema,
   SSEProposalSchema,
+  UsdcSolQuoteResponseSchema,
   ConditionalOrderListResponseSchema,
   ConditionalOrderTriggerResponseSchema,
   ConditionalOrderStatusEnum,
@@ -133,6 +134,50 @@ describe('api schemas', () => {
 
     expect(parsed.change_24h_pct).toBeUndefined();
     expect(parsed.balances[0].ui_amount).toBe(7.49984);
+  });
+
+  it('validates partial wallet balances with warnings', () => {
+    const parsed = GetBalancesResponseSchema.parse({
+      balances: [
+        {
+          symbol: 'SOL',
+          mint: 'So11111111111111111111111111111111111111112',
+          amount: '2500000000',
+          decimals: 9,
+          ui_amount: 2.5,
+          usd_value: 0,
+        },
+      ],
+      total_usd: 0,
+      updated_at: '2026-05-10T02:03:57.138Z',
+      partial: true,
+      warnings: [
+        {
+          code: 'spl_holdings_unavailable',
+          message: 'SPL token holdings unavailable',
+        },
+      ],
+    });
+
+    expect(parsed.partial).toBe(true);
+    expect(parsed.warnings?.[0].code).toBe('spl_holdings_unavailable');
+  });
+
+  it('validates usdc/sol quote response', () => {
+    const parsed = UsdcSolQuoteResponseSchema.parse({
+      network: 'devnet',
+      provider: 'orca_whirlpools_devnet',
+      input_token: 'USDC',
+      output_token: 'SOL',
+      input_amount: 12,
+      output_amount: 0.0321,
+      input_mint: 'BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k',
+      output_mint: 'So11111111111111111111111111111111111111112',
+      slippage_bps: 100,
+      updated_at: '2026-05-10T02:03:57.138Z',
+    });
+
+    expect(parsed.provider).toBe('orca_whirlpools_devnet');
   });
 
   it('validates function approve response without signed tx submission', () => {

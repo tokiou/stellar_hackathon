@@ -7,6 +7,7 @@ export type OrcaSwapParams = {
   output_token: 'USDC' | 'SOL';
   input_amount: number;
   slippage_bps?: number;
+  allow_fallback?: boolean;
 };
 
 export type OrcaSwapQuote = {
@@ -66,6 +67,9 @@ export async function quoteOrcaUsdcToSol(params: OrcaSwapParams): Promise<OrcaSw
       fetchTokenPriceUsdc(baseUrl, DEVNET_SOL_MINT),
     ]);
   } catch (e) {
+    if (params.allow_fallback === false) {
+      throw new Error(`orca_quote_failed:${e instanceof Error ? e.message : 'unknown'}`);
+    }
     // Fallback hardcoded devnet quote baseline to avoid breaking UX when API is flaky.
     // This only affects proposal estimate; final execution still uses on-chain tx building/signing.
     usdcPrice = 1;

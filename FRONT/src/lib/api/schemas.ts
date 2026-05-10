@@ -162,7 +162,27 @@ export const TokenBalanceSchema = z.object({
 export const GetBalancesResponseSchema = z.object({
   balances: z.array(TokenBalanceSchema),
   total_usd: z.number(),
+  network: z.enum(['devnet', 'mainnet-beta']).optional(),
   change_24h_pct: z.number().optional(),
+  updated_at: z.string(),
+  partial: z.boolean().optional(),
+  warnings: z.array(z.object({
+    code: z.literal('spl_holdings_unavailable'),
+    message: z.string(),
+  })).optional(),
+});
+
+export const UsdcSolQuoteResponseSchema = z.object({
+  network: z.enum(['devnet']),
+  provider: z.literal('orca_whirlpools_devnet'),
+  input_token: z.enum(['USDC', 'SOL']),
+  output_token: z.enum(['USDC', 'SOL']),
+  input_amount: z.number().positive(),
+  output_amount: z.number().nonnegative(),
+  input_mint: z.string(),
+  output_mint: z.string(),
+  slippage_bps: z.number().nonnegative(),
+  route_context: z.string().optional(),
   updated_at: z.string(),
 });
 

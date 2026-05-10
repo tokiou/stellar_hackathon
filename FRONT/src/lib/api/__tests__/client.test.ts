@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { streamChat } from '../client';
+import { getUsdcSolQuote } from '../client';
 
 function sseResponseFromChunks(chunks: string[]) {
   const encoder = new TextEncoder();
@@ -50,5 +51,38 @@ describe('streamChat', () => {
     );
 
     expect(events).toEqual(['session:session-1', 'token:Hola', 'done:session-1']);
+  });
+
+  it('encodes usdc-sol quote query params', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          network: 'devnet',
+          provider: 'orca_whirlpools_devnet',
+          input_token: 'USDC',
+          output_token: 'SOL',
+          input_amount: 10,
+          output_amount: 0.03,
+          input_mint: 'BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k',
+          output_mint: 'So11111111111111111111111111111111111111112',
+          slippage_bps: 100,
+          updated_at: new Date().toISOString(),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    await getUsdcSolQuote({
+      input_token: 'USDC',
+      output_token: 'SOL',
+      input_amount: 10,
+      slippage_bps: 100,
+      network: 'devnet',
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/quotes/usdc-sol?input_token=USDC&output_token=SOL&input_amount=10&slippage_bps=100&network=devnet',
+      expect.anything(),
+    );
   });
 });

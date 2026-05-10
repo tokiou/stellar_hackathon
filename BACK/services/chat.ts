@@ -40,6 +40,8 @@ import {
   type ResponsesToolDefinition,
 } from './azureResponsesClient';
 import { web3 } from '@coral-xyz/anchor';
+import { fetchWalletHoldings } from './walletHoldings';
+import { getUsdcSolQuote } from './priceQuote';
 
 // ============================================================================
 // Types - Unified Contract
@@ -204,8 +206,71 @@ const ORCA_SWAP_TOOL: ResponsesToolDefinition = {
   },
 };
 
-const ALL_TOOLS = [TRANSFER_TOOL, CONDITIONAL_BUY_SOL_TOOL, ORCA_SWAP_TOOL];
+const GET_WALLET_HOLDINGS_TOOL: ResponsesToolDefinition = {
+  type: 'function',
+  name: 'get_wallet_holdings',
+  description:
+    'Consulta balances de la wallet conectada usando backend (SOL nativo + SPL) en devnet. ' +
+    'No prepara ni ejecuta transacciones.',
+  parameters: {
+    type: 'object',
+    properties: {
+      address: {
+        type: 'string',
+        description: 'Dirección de wallet Solana',
+      },
+      network: {
+        type: 'string',
+        enum: ['devnet'],
+      },
+    },
+    required: ['address'],
+  },
+};
 
+const GET_USDC_SOL_QUOTE_TOOL: ResponsesToolDefinition = {
+  type: 'function',
+  name: 'get_usdc_sol_quote',
+  description: 'Consulta una cotizacion devnet USDC/SOL de solo lectura para contexto del agente.',
+  parameters: {
+    type: 'object',
+    properties: {
+      input_token: {
+        type: 'string',
+        enum: ['USDC', 'SOL'],
+      },
+      output_token: {
+        type: 'string',
+        enum: ['USDC', 'SOL'],
+      },
+      input_amount: {
+        type: 'number',
+        description: 'Monto de entrada',
+      },
+      slippage_bps: {
+        type: 'number',
+        description: 'Slippage en bps',
+      },
+      network: {
+        type: 'string',
+        enum: ['devnet'],
+      },
+    },
+    required: ['input_token', 'output_token', 'input_amount'],
+  },
+};
+
+const READ_ONLY_AGENT_TOOL_NAMES = ['get_wallet_holdings', 'get_usdc_sol_quote'] as const;
+
+export const ALL_TOOLS = [TRANSFER_TOOL, CONDITIONAL_BUY_SOL_TOOL, ORCA_SWAP_TOOL, GET_WALLET_HOLDINGS_TOOL, GET_USDC_SOL_QUOTE_TOOL];
+
+export function getAgentToolNames(): string[] {
+  return ALL_TOOLS.map((tool) => tool.name);
+}
+
+export function isReadOnlyAgentTool(toolName: string): boolean {
+  return (READ_ONLY_AGENT_TOOL_NAMES as readonly string[]).includes(toolName);
+}
 const DEFAULT_SOLANA_NETWORK: SolanaNetwork = 'devnet';
 const PROPOSAL_TTL_MS = 5 * 60 * 1000;
 
@@ -416,6 +481,8 @@ async function handleUserMessage(request: {
         'Ayudas a los usuarios a realizar transferencias y compras condicionales de SOL de forma segura. ' +
         'Cuando el usuario pida transferir SOL o tokens, usa la herramienta transfer. ' +
         'Cuando el usuario pida comprar SOL solo si el precio está por debajo de X, usa la herramienta conditional_buy_sol. ' +
+        'Cuando el usuario pida conocer el saldo real de su wallet, usa get_wallet_holdings. ' +
+        'Cuando el usuario pida una cotizacion de conversion USDC/SOL, usa get_usdc_sol_quote. ' +
         'IMPORTANTE: NUNCA digas que ejecutaste una transferencia on-chain. Solo puedes preparar la acción y pedir aprobación del usuario. ' +
         'Responde en español de forma concisa y amigable.';
 
@@ -431,7 +498,13 @@ async function handleUserMessage(request: {
 
       // Check for tool calls in output
       const toolCall = initialResponse.output?.find(
-        (o) => o.type === 'function_call' && (o.name === 'transfer' || o.name === 'conditional_buy_sol' || o.name === 'swap_orca_usdc_to_sol')
+        (o) =>
+          o.type === 'function_call' &&
+          (o.name === 'transfer' ||
+            o.name === 'conditional_buy_sol' ||
+            o.name === 'swap_orca_usdc_to_sol' ||
+            o.name === 'get_wallet_holdings' ||
+            o.name === 'get_usdc_sol_quote')
       );
 
         if (toolCall && toolCall.name) {
@@ -453,6 +526,22 @@ async function handleUserMessage(request: {
             session,
             writer,
             encoder
+          );
+        } else if (toolCall.name === 'get_wallet_holdings') {
+          await handleGetWalletHoldingsToolCall(
+            { name: toolCall.name, arguments: toolCall.arguments },
+            sessionId,
+            session.userAddress,
+            writer,
+            encoder,
+          );
+        } else if (toolCall.name === 'get_usdc_sol_quote') {
+          await handleGetUsdcSolQuoteToolCall(
+            { name: toolCall.name, arguments: toolCall.arguments },
+            sessionId,
+            session.userAddress,
+            writer,
+            encoder,
           );
         } else {
           await handleOrcaSwapToolCall(
@@ -568,6 +657,135 @@ async function handleOrcaSwapToolCall(
       code: 'orca_quote_failed',
       message: e instanceof Error ? e.message : 'Orca quote failed',
     });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+  }
+}
+
+async function handleGetWalletHoldingsToolCall(
+  toolCall: { name: string; arguments?: string },
+  sessionId: string,
+  userAddress: string | undefined,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  encoder: TextEncoder
+) {
+  let rawAddress: string | undefined;
+  let network: string | undefined;
+  try {
+    const parsed = JSON.parse(toolCall.arguments || '{}');
+    rawAddress = parsed.address || userAddress;
+    network = parsed.network;
+  } catch {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_tool_args',
+      message: 'Could not parse get_wallet_holdings args',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  if (!rawAddress) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_wallet_address',
+      message: 'Wallet address is required for holdings lookup',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  try {
+    const holdings = await fetchWalletHoldings({
+      address: rawAddress,
+      network: network ?? 'devnet',
+    });
+
+    await writeSSE(writer, encoder, 'token', { content: JSON.stringify(holdings) });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+  } catch (error) {
+    const errorCode = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : 'Unable to fetch wallet holdings.';
+    if (errorCode === 'invalid_address') {
+      await writeSSE(writer, encoder, 'error', { code: 'invalid_tool_args', message });
+    } else if (errorCode === 'unsupported_network') {
+      await writeSSE(writer, encoder, 'error', { code: 'unsupported_network', message });
+    } else {
+      await writeSSE(writer, encoder, 'error', { code: 'provider_error', message });
+    }
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+  }
+}
+
+async function handleGetUsdcSolQuoteToolCall(
+  toolCall: { name: string; arguments?: string },
+  sessionId: string,
+  userAddress: string | undefined,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  encoder: TextEncoder
+) {
+  let args: {
+    input_token?: string;
+    output_token?: string;
+    input_amount?: unknown;
+    slippage_bps?: unknown;
+    network?: string;
+  };
+  try {
+    args = JSON.parse(toolCall.arguments || '{}');
+  } catch {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_tool_args',
+      message: 'Could not parse get_usdc_sol_quote args',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  if (!args.input_token || !args.output_token || args.input_amount == null) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_tool_args',
+      message: 'Missing required quote parameters',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  if (typeof args.input_amount !== 'number' || Number.isNaN(args.input_amount) || args.input_amount <= 0) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_tool_args',
+      message: 'input_amount must be a positive number',
+    });
+    await writer.close();
+    return;
+  }
+
+  try {
+    const quote = await getUsdcSolQuote({
+      input_token: String(args.input_token).toUpperCase() as 'USDC' | 'SOL',
+      output_token: String(args.output_token).toUpperCase() as 'USDC' | 'SOL',
+      input_amount: args.input_amount,
+      ...(typeof args.slippage_bps === 'number' ? { slippage_bps: args.slippage_bps } : {}),
+      network: args.network ?? 'devnet',
+    });
+
+    await writeSSE(writer, encoder, 'token', { content: JSON.stringify(quote) });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+  } catch (error) {
+    const errorCode = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : 'Unable to fetch quote.';
+    if (errorCode === 'invalid_pair' || errorCode === 'invalid_amount' || errorCode === 'invalid_quote_payload') {
+      await writeSSE(writer, encoder, 'error', { code: 'invalid_tool_args', message });
+    } else if (errorCode === 'unsupported_network') {
+      await writeSSE(writer, encoder, 'error', { code: 'unsupported_network', message });
+    } else {
+      await writeSSE(writer, encoder, 'error', { code: 'provider_error', message });
+    }
     await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     await writer.close();
   }

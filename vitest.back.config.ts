@@ -7,7 +7,7 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['BACK/services/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+    include: ['BACK/services/**/*.{test,spec}.?(c|m)[jt]s?(x)', 'app/api/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   },
   resolve: {
     alias: {

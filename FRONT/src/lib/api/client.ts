@@ -5,6 +5,8 @@ import type {
   ConditionalOrderSnapshot,
   GetAllocationResponse,
   GetBalancesResponse,
+  UsdcSolQuoteQuery,
+  UsdcSolQuoteResponse,
   GetNetworkStatusResponse,
   GetPricesResponse,
   GetTransactionsQuery,
@@ -21,6 +23,7 @@ import {
   ConditionalOrderListResponseSchema,
   ConditionalOrderTriggerResponseSchema,
   GetPricesResponseSchema,
+  UsdcSolQuoteResponseSchema,
   GetTransactionsResponseSchema,
   SSEProposalSchema,
 } from './schemas';
@@ -362,6 +365,18 @@ export function getNetworkStatus(): Promise<GetNetworkStatusResponse> {
 
 export function getPrices(symbols: string[]): Promise<GetPricesResponse> {
   return getJson(`/api/prices?symbols=${encodeURIComponent(symbols.join(','))}`, GetPricesResponseSchema) as Promise<GetPricesResponse>;
+}
+
+export function getUsdcSolQuote(params: UsdcSolQuoteQuery): Promise<UsdcSolQuoteResponse> {
+  const url = `/api/quotes/usdc-sol?` + new URLSearchParams({
+    input_token: params.input_token,
+    output_token: params.output_token,
+    input_amount: String(params.input_amount),
+    ...(params.slippage_bps === undefined ? {} : { slippage_bps: String(params.slippage_bps) }),
+    ...(params.network ? { network: params.network } : {}),
+  }).toString();
+
+  return getJson(url, UsdcSolQuoteResponseSchema) as Promise<UsdcSolQuoteResponse>;
 }
 
 export function getConditionalOrders(userAddress: string): Promise<ConditionalOrderSnapshot[]> {

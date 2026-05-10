@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeMessages } from '../chat';
+import { getAgentToolNames, isReadOnlyAgentTool, normalizeMessages } from '../chat';
 import { prepareTransferResult } from '../tools/transfer';
+
+describe('chat agent tool catalog', () => {
+  it('includes backend managed read-only context tools', () => {
+    const toolNames = getAgentToolNames();
+    expect(toolNames).toEqual(expect.arrayContaining(['get_wallet_holdings', 'get_usdc_sol_quote']));
+    expect(isReadOnlyAgentTool('get_wallet_holdings')).toBe(true);
+    expect(isReadOnlyAgentTool('get_usdc_sol_quote')).toBe(true);
+    expect(isReadOnlyAgentTool('transfer')).toBe(false);
+  });
+});
 
 describe('normalizeMessages', () => {
   it('normalizes valid messages array', () => {

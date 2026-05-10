@@ -159,8 +159,14 @@ export type GetBalancesQuery = {
 export type GetBalancesResponse = {
   balances: TokenBalance[];
   total_usd: number;
+  network?: 'devnet' | 'mainnet-beta';
   change_24h_pct?: number;
   updated_at: string;
+  partial?: boolean;
+  warnings?: Array<{
+    code: 'spl_holdings_unavailable';
+    message: string;
+  }>;
 };
 
 export type TokenBalance = {
@@ -220,5 +226,27 @@ export type GetPricesQuery = {
 
 export type GetPricesResponse = {
   prices: Record<string, number>;
+  updated_at: string;
+};
+
+export type UsdcSolQuoteQuery = {
+  network?: 'devnet';
+  input_token: 'USDC' | 'SOL';
+  output_token: 'USDC' | 'SOL';
+  input_amount: number;
+  slippage_bps?: number;
+};
+
+export type UsdcSolQuoteResponse = {
+  network: 'devnet';
+  provider: 'orca_whirlpools_devnet';
+  input_token: 'USDC' | 'SOL';
+  output_token: 'USDC' | 'SOL';
+  input_amount: number;
+  output_amount: number;
+  input_mint: string;
+  output_mint: string;
+  slippage_bps: number;
+  route_context?: string;
   updated_at: string;
 };
