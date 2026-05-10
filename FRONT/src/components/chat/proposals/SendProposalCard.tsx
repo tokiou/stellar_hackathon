@@ -8,6 +8,15 @@ import { RiskInlineAlert } from './RiskInlineAlert';
 export function SendProposalCard({ proposal }: { proposal: PendingProposal }) {
   const params = proposal.function.params as TransferParams;
   const { approveProposal, rejectProposal } = useAgentMessage();
+  const uiState = proposal.uiState;
+  const isBusy =
+    uiState === 'preparing_transaction' ||
+    uiState === 'awaiting_signature' ||
+    uiState === 'submitted' ||
+    uiState === 'confirming';
+  const done = uiState === 'confirmed';
+  const failed = uiState === 'failed';
+  const cancelled = uiState === 'cancelled';
 
   return (
     <div className="rounded-2xl border border-outline bg-surface p-6 shadow-sm">
@@ -26,8 +35,20 @@ export function SendProposalCard({ proposal }: { proposal: PendingProposal }) {
       </div>
       <RiskInlineAlert risk={proposal.risk} />
       <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-        <button onClick={rejectProposal} className="rounded-xl border border-outline px-4 py-3 text-sm font-semibold text-on-surface hover:bg-surface-hover">Cancel</button>
-        <button onClick={approveProposal} className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-on-primary hover:bg-primary-hover">Confirm Send</button>
+        <button
+          onClick={rejectProposal}
+          disabled={isBusy || done || failed || cancelled}
+          className="rounded-xl border border-outline px-4 py-3 text-sm font-semibold text-on-surface hover:bg-surface-hover disabled:opacity-50"
+        >
+          {isBusy ? 'Cancel' : cancelled ? 'Cancelled' : done ? 'Done' : 'Cancel'}
+        </button>
+        <button
+          onClick={approveProposal}
+          disabled={isBusy || done || failed || cancelled}
+          className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-on-primary disabled:opacity-50 ${proposal.risk.level === 'critical' ? 'bg-error-text hover:bg-error-text/90' : 'bg-primary hover:bg-primary-hover'}`}
+        >
+          {isBusy ? 'Preparing…' : done ? 'Confirmed' : failed || cancelled ? 'Failed' : 'Confirm Send'}
+        </button>
       </div>
     </div>
   );

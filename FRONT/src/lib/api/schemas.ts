@@ -15,7 +15,7 @@ export const RiskInfoSchema = z.object({
 });
 
 export const ExecuteSchema = z.object({
-  status: z.enum(['success', 'failed']),
+  status: z.enum(['submitted', 'confirmed', 'failed', 'success']),
   tx_hash: z.string().optional(),
   error: z.string().optional(),
 });
@@ -39,6 +39,20 @@ export const StakeParamsSchema = z.object({
   validator: z.string(),
 });
 
+export const ConditionalBuySolParamsSchema = z.object({
+  input_token: z.literal('USDC'),
+  input_amount: z.number().positive(),
+  target_price_usd: z.number().positive(),
+  min_sol_out: z.number().positive().optional(),
+});
+
+export const FunctionExecutionSchema = z.object({
+  mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
+  network: z.enum(['devnet', 'mainnet-beta']),
+  expires_at: z.string(),
+  expected_user_address: z.string().optional(),
+});
+
 export const AgentMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('text'),
@@ -49,8 +63,8 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('function_call'),
     function: z.object({
-      name: z.enum(['swap', 'transfer', 'stake']),
-      params: z.union([SwapParamsSchema, TransferParamsSchema, StakeParamsSchema]),
+      name: z.enum(['swap', 'transfer', 'stake', 'conditional_buy_sol']),
+      params: z.union([SwapParamsSchema, TransferParamsSchema, StakeParamsSchema, ConditionalBuySolParamsSchema]),
     }),
     display: z.object({
       summary: z.string(),
@@ -59,6 +73,7 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
       slippage_bps: z.number().optional(),
     }),
     risk: RiskInfoSchema,
+    execution: FunctionExecutionSchema.optional(),
     timestamp: z.string(),
   }),
   z.object({
@@ -71,6 +86,29 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
 
 export const AgentMessageResponseSchema = z.object({
   messages: z.array(AgentMessageSchema),
+});
+
+export const FunctionApproveResponseSchema = AgentMessageResponseSchema.extend({
+  proposal_state: z.object({
+    state: z.literal('awaiting_signature'),
+    expires_at: z.string(),
+  }),
+  transaction: z
+    .object({
+      format: z.literal('base64_versioned_transaction'),
+      unsigned_tx_base64: z.string(),
+      recent_blockhash: z.string(),
+      last_valid_block_height: z.number().int(),
+      network: z.enum(['devnet', 'mainnet-beta']),
+    })
+    .optional(),
+});
+
+export const ChatFunctionResultSchema = z.object({
+  session_id: z.string(),
+  tx_signature: z.string(),
+  status: z.enum(['submitted', 'confirmed', 'failed']),
+  error_message: z.string().optional(),
 });
 
 export const TokenBalanceSchema = z.object({
@@ -86,7 +124,7 @@ export const TokenBalanceSchema = z.object({
 export const GetBalancesResponseSchema = z.object({
   balances: z.array(TokenBalanceSchema),
   total_usd: z.number(),
-  change_24h_pct: z.number(),
+  change_24h_pct: z.number().optional(),
   updated_at: z.string(),
 });
 
@@ -135,8 +173,13 @@ export const GetPricesResponseSchema = z.object({
 export const SSEProposalSchema = z.object({
   type: z.literal('function_call'),
   function: z.object({
-    name: z.literal('transfer'),
-    params: TransferParamsSchema,
+    name: z.union([
+      z.literal('transfer'),
+      z.literal('conditional_buy_sol'),
+      z.literal('swap'),
+      z.literal('stake'),
+    ]),
+    params: z.union([TransferParamsSchema, SwapParamsSchema, StakeParamsSchema, ConditionalBuySolParamsSchema]),
   }),
   display: z.object({
     summary: z.string(),
@@ -144,5 +187,11 @@ export const SSEProposalSchema = z.object({
     provider: z.string().optional(),
   }),
   risk: RiskInfoSchema,
+  execution: z.object({
+    mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
+    network: z.enum(['devnet', 'mainnet-beta']),
+    expires_at: z.string(),
+    expected_user_address: z.string().optional(),
+  }),
   timestamp: z.string(),
 });

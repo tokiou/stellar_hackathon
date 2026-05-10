@@ -1,15 +1,25 @@
 import { useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { streamChat, postApprove, postReject, ApiClientError } from '@/lib/api/client';
+import {
+  streamChat,
+  postApprove,
+  postFunctionResult,
+  postReject,
+  ApiClientError,
+} from '@/lib/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useWallet } from './useWallet';
 
+type SignAndSendError = Error & {
+  code?: string;
+};
+
 export function useAgentMessage() {
   const queryClient = useQueryClient();
   const threshold = useSettingsStore((state) => state.autoConfirmThresholdUsd);
-  const { address: userAddress } = useWallet();
-  
+  const { address: userAddress, signAndSendPreparedTransaction } = useWallet();
+
   // Store actions
   const sessionId = useChatStore((state) => state.sessionId);
   const setSessionId = useChatStore((state) => state.setSessionId);
@@ -65,7 +75,14 @@ export function useAgentMessage() {
             // If awaiting_approval, the proposal handler already updated status
           },
           onError: (error) => {
-            console.error('[chat] SSE error:', error);
+            console.warn('[chat] SSE error:', error.code, error.message);
+            addAgentMessages([
+              {
+                type: 'text',
+                content: error.message || 'No pude completar la respuesta. Probá reformular el pedido.',
+                timestamp: new Date().toISOString(),
+              },
+            ]);
             finishStreaming();
             setStatus('idle');
           },
@@ -94,6 +111,7 @@ export function useAgentMessage() {
     finishStreaming,
     setSessionId,
     setProposalFromSSE,
+    addAgentMessages,
     setStatus,
   ]);
 
@@ -103,31 +121,80 @@ export function useAgentMessage() {
     if (!proposal || !currentSessionId) return;
 
     setStatus('executing');
-    setProposalUiState('awaiting_execution');
+    setProposalUiState('preparing_transaction');
 
     try {
       const response = await postApprove(currentSessionId);
-      
-      // Process response messages
       if (response.messages.length > 0) {
         addAgentMessages(response.messages);
-        
-        // Check for execute info in response
-        const textMessage = response.messages.find((m) => m.type === 'text' && 'execute' in m);
-        if (textMessage && textMessage.type === 'text' && textMessage.execute) {
-          completeProposal(textMessage.execute.status, textMessage.execute);
-          await queryClient.invalidateQueries({ queryKey: ['wallet'] });
-        } else {
-          completeProposal('success');
-        }
-      } else {
-        completeProposal('success');
       }
+
+      if (!response.transaction?.unsigned_tx_base64) {
+        completeProposal('failed', {
+          status: 'failed',
+          error: 'No se pudo preparar la transacción para firma',
+        });
+        return;
+      }
+
+      setProposalUiState('awaiting_signature');
+
+      const expectedUserAddress = proposal.execution?.expected_user_address;
+      const signResult = await signAndSendPreparedTransaction(
+        response.transaction.unsigned_tx_base64,
+        expectedUserAddress ?? userAddress,
+      );
+
+      setProposalUiState('submitted');
+      postFunctionResult(currentSessionId, signResult.tx_signature, 'submitted').catch((callbackError) => {
+        console.warn('[chat] Optional function_result submitted callback failed:', callbackError);
+      });
+
+      completeProposal('success', {
+        status: 'success',
+        tx_hash: signResult.tx_signature,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ['wallet'] });
+      postFunctionResult(currentSessionId, signResult.tx_signature, 'confirmed').catch((callbackError) => {
+        console.warn('[chat] Optional function_result confirmed callback failed:', callbackError);
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Error al aprobar la transferencia';
+      const errorCode = (error as SignAndSendError)?.code;
+      const rejectedByUser = errorCode === 'user_rejected' || /rejected|denied/i.test(errorMessage);
+      const shouldCancel =
+        errorCode === 'wallet_mismatch' ||
+        errorCode === 'phantom_not_connected' ||
+        errorCode === 'account_changed';
+
       console.error('[chat] Approve error:', error);
-      completeProposal('failed', { status: 'failed', error: 'Error al aprobar la transferencia' });
+
+      if (rejectedByUser || shouldCancel) {
+        setProposalUiState('cancelled');
+        setPendingProposal(null);
+        setStatus('idle');
+        postReject(currentSessionId, errorMessage).catch((rejectError) => {
+          console.warn('[chat] Optional reject cleanup failed:', rejectError);
+        });
+        return;
+      }
+
+      completeProposal('failed', {
+        status: 'failed',
+        error: errorMessage,
+      });
     }
-  }, [addAgentMessages, completeProposal, setStatus, setProposalUiState, queryClient]);
+  }, [
+    userAddress,
+    addAgentMessages,
+    completeProposal,
+    setStatus,
+    setProposalUiState,
+    setPendingProposal,
+    signAndSendPreparedTransaction,
+    queryClient,
+  ]);
 
   const rejectProposal = useCallback(async () => {
     const currentSessionId = useChatStore.getState().sessionId;

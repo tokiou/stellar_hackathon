@@ -4,14 +4,26 @@ import { AlertBanner } from './AlertBanner';
 import { TxResultMessage } from './TxResultMessage';
 import { UserMessage } from './UserMessage';
 import { ProposalCard } from './proposals/ProposalCard';
+import { useChatStore } from '@/stores/chatStore';
 
 export function MessageList({ messages }: { messages: ChatMessage[] }) {
+  const pendingProposal = useChatStore((state) => state.pendingProposal);
+
   return (
     <div className="space-y-5">
       {messages.map((message) => {
         if (message.role === 'user') return <UserMessage key={message.id} message={message} />;
         if (message.type === 'alert') return <AlertBanner key={message.id} message={message} />;
-        if (message.type === 'function_call') return <ProposalCard key={message.id} proposal={{ ...(message as PendingProposal), uiState: 'pending' }} />;
+        if (message.type === 'function_call') {
+          const proposal: PendingProposal =
+            pendingProposal && pendingProposal.id === message.id
+              ? pendingProposal
+              : {
+                  ...(message as PendingProposal),
+                  uiState: (message as PendingProposal).uiState || 'pending',
+                };
+          return <ProposalCard key={message.id} proposal={proposal} />;
+        }
         if (message.type === 'text' && message.execute) return <TxResultMessage key={message.id} message={message} />;
         if (message.type === 'text') return <AgentMessage key={message.id} message={message} />;
         return null;

@@ -28,7 +28,8 @@ Frontend
 - No llamar directamente a RugCheck, Solana Tracker u otros risk-score providers.
 - No abrir conexiones RPC de Solana desde cliente.
 - No manejar provider API keys en variables públicas.
-- No simular, construir, firmar ni enviar transacciones.
+- No simular ni construir transacciones desde intención de usuario.
+- Sí puede firmar/enviar con Phantom injected una unsigned transaction preparada por el backend.
 
 ## Qué SÍ debe hacer el frontend
 
