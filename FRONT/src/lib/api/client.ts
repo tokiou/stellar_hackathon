@@ -114,10 +114,13 @@ export type ChatRequest =
   | {
       type: 'function_approve';
       session_id: string;
+      user_address?: string;
+      accept_risk?: boolean;
     }
   | {
       type: 'function_result';
       session_id: string;
+      user_address?: string;
       tx_signature: string;
       status: 'submitted' | 'confirmed' | 'failed';
       error_message?: string;
@@ -125,11 +128,13 @@ export type ChatRequest =
   | {
       type: 'function_reject';
       session_id: string;
+      user_address?: string;
       reason?: string;
     }
   | {
       type: 'get_history';
       session_id: string;
+      user_address?: string;
     };
 
 export type SSEEvent =
@@ -336,10 +341,14 @@ export type AgentMessageResponse = {
 /**
  * Approve a pending proposal (JSON response)
  */
-export function postApprove(sessionId: string, acceptRisk?: boolean): Promise<ApproveResponse> {
+export function postApprove(
+  sessionId: string,
+  acceptRisk?: boolean,
+  userAddress?: string
+): Promise<ApproveResponse> {
   return postJson(
     '/api/chat',
-    { type: 'function_approve', session_id: sessionId, accept_risk: acceptRisk },
+    { type: 'function_approve', session_id: sessionId, accept_risk: acceptRisk, user_address: userAddress },
     FunctionApproveResponseSchema
   ) as Promise<ApproveResponse>;
 }
@@ -347,10 +356,10 @@ export function postApprove(sessionId: string, acceptRisk?: boolean): Promise<Ap
 /**
  * Reject a pending proposal (JSON response)
  */
-export function postReject(sessionId: string, reason?: string): Promise<AgentMessageResponse> {
+export function postReject(sessionId: string, reason?: string, userAddress?: string): Promise<AgentMessageResponse> {
   return postJson(
     '/api/chat',
-    { type: 'function_reject', session_id: sessionId, reason },
+    { type: 'function_reject', session_id: sessionId, reason, user_address: userAddress },
     AgentMessageResponseSchema
   ) as Promise<AgentMessageResponse>;
 }
@@ -360,6 +369,7 @@ export function postFunctionResult(
   txSignature: string,
   status: 'submitted' | 'confirmed' | 'failed',
   errorMessage?: string,
+  userAddress?: string,
 ): Promise<AgentMessageResponseType> {
   return postJson(
     '/api/chat',
@@ -368,14 +378,19 @@ export function postFunctionResult(
       session_id: sessionId,
       tx_signature: txSignature,
       status,
+      user_address: userAddress,
       error_message: errorMessage,
     },
     AgentMessageResponseSchema
   ) as Promise<AgentMessageResponseType>;
 }
 
-export function getHistory(sessionId: string): Promise<GetHistoryResponse> {
-  return postJson('/api/chat', { type: 'get_history', session_id: sessionId }, GetHistoryResponseSchema) as Promise<GetHistoryResponse>;
+export function getHistory(sessionId: string, userAddress?: string): Promise<GetHistoryResponse> {
+  return postJson(
+    '/api/chat',
+    { type: 'get_history', session_id: sessionId, user_address: userAddress },
+    GetHistoryResponseSchema,
+  ) as Promise<GetHistoryResponse>;
 }
 
 // ============================================================================

@@ -12,6 +12,7 @@ import { useWalletBalances } from './useWalletBalances';
 type WalletState = {
   isConnected: boolean;
   isConnecting: boolean;
+  isResolved: boolean;
   address: string | undefined;
   walletError: string | undefined;
 };
@@ -23,6 +24,7 @@ type SignAndSendError = Error & {
 const INITIAL_WALLET_STATE: WalletState = {
   isConnected: false,
   isConnecting: false,
+  isResolved: false,
   address: undefined,
   walletError: undefined,
 };
@@ -57,6 +59,7 @@ function handleConnectedPublicKey(publicKey: PhantomPublicKey | null) {
       address: publicKey.toBase58(),
       isConnected: true,
       isConnecting: false,
+      isResolved: true,
       walletError: undefined,
     });
     return;
@@ -66,6 +69,7 @@ function handleConnectedPublicKey(publicKey: PhantomPublicKey | null) {
     address: undefined,
     isConnected: false,
     isConnecting: false,
+    isResolved: true,
   });
 }
 
@@ -74,6 +78,7 @@ function handleDisconnect() {
     address: undefined,
     isConnected: false,
     isConnecting: false,
+    isResolved: true,
   });
 }
 
@@ -98,6 +103,9 @@ function attemptEagerConnect() {
   const provider = getPhantomProvider();
 
   if (!provider || eagerConnectAttempted) {
+    if (!provider) {
+      updateWalletState({ isResolved: true });
+    }
     return;
   }
 
@@ -106,7 +114,7 @@ function attemptEagerConnect() {
   provider.connect({ onlyIfTrusted: true })
     .then((response) => handleConnectedPublicKey(response.publicKey))
     .catch(() => {
-      // Silent fail: the user has not previously trusted this app in Phantom.
+      updateWalletState({ isResolved: true });
     });
 }
 
@@ -192,7 +200,7 @@ export function useWallet() {
   const allocation = getAllocationFromBalances(balancesQuery.data?.balances);
 
   const connect = useCallback(async () => {
-    updateWalletState({ walletError: undefined, isConnecting: true });
+    updateWalletState({ walletError: undefined, isConnecting: true, isResolved: true });
 
     try {
       const provider = getPhantomProvider();
@@ -210,6 +218,7 @@ export function useWallet() {
         walletError: getErrorMessage(error),
         isConnected: false,
         isConnecting: false,
+        isResolved: true,
         address: undefined,
       });
     }
@@ -228,10 +237,11 @@ export function useWallet() {
         address: undefined,
         walletError: undefined,
         isConnecting: false,
+        isResolved: true,
       });
     } catch (error) {
       console.error('Failed to disconnect from Phantom:', error);
-      updateWalletState({ walletError: getErrorMessage(error), isConnecting: false });
+      updateWalletState({ walletError: getErrorMessage(error), isConnecting: false, isResolved: true });
     }
   }, []);
 
@@ -265,8 +275,9 @@ export function useWallet() {
     console.log('[useWallet] Transaction details:', {
       isVersioned,
       numSignatures: isVersioned ? (tx as web3.VersionedTransaction).signatures.length : (tx as web3.Transaction).signatures.length,
-      // @ts-ignore
-      numInstructions: isVersioned ? (tx as web3.VersionedTransaction).message.compiledInstructions?.length : (tx as web3.Transaction).instructions?.length,
+      numInstructions: isVersioned
+        ? (tx as web3.VersionedTransaction).message.compiledInstructions.length
+        : (tx as web3.Transaction).instructions.length,
     });
 
     try {
@@ -341,14 +352,15 @@ export function useWallet() {
       }
 
       return { tx_signature: signature };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[useWallet] signAndSendTransaction error:', error);
+      const errorObject = error && typeof error === 'object' ? error : null;
       console.error('[useWallet] Error details:', {
-        message: error?.message,
-        code: error?.code,
-        name: error?.name,
-        stack: error?.stack,
-        raw: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+        message: getErrorMessage(error),
+        code: errorObject && 'code' in errorObject ? errorObject.code : undefined,
+        name: error instanceof Error ? error.name : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+        raw: errorObject ? JSON.stringify(error, Object.getOwnPropertyNames(error)) : String(error),
       });
       const mapped = mapPhantomError(error);
       throwWithCode(mapped.code, mapped.message);
@@ -364,6 +376,7 @@ export function useWallet() {
     isConnected: state.isConnected,
     isConnecting: state.isConnecting,
     isDisconnecting: false,
+    isResolved: state.isResolved,
     address: state.address,
     connect,
     disconnect,

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiClientError, getHistory, streamChat } from '../client';
+import {
+  ApiClientError,
+  getHistory,
+  postApprove,
+  postFunctionResult,
+  postReject,
+  streamChat,
+} from '../client';
 import { getUsdcSolQuote } from '../client';
 
 function sseResponseFromChunks(chunks: string[]) {
@@ -123,6 +130,100 @@ describe('chat session history endpoint', () => {
       '/api/chat',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('sends user_address when requesting history', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          session_id: 'session-1',
+          user_address: 'wallet-1',
+          updated_at: new Date().toISOString(),
+          messages: [],
+          pending_proposal: null,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    await getHistory('session-1', 'wallet-1');
+
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      type: 'get_history',
+      session_id: 'session-1',
+      user_address: 'wallet-1',
+    });
+  });
+
+  it('sends user_address on function_approve', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          messages: [],
+          proposal_state: {
+            state: 'awaiting_signature',
+            expires_at: new Date().toISOString(),
+          },
+          transaction: {
+            format: 'base64_versioned_transaction',
+            unsigned_tx_base64: 'tx',
+            recent_blockhash: 'recent',
+            last_valid_block_height: 1,
+            network: 'devnet',
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    await postApprove('session-1', undefined, 'wallet-1');
+
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      type: 'function_approve',
+      session_id: 'session-1',
+      user_address: 'wallet-1',
+    });
+  });
+
+  it('sends user_address on function_result', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await postFunctionResult('session-1', 'sig-1', 'confirmed', undefined, 'wallet-1');
+
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      type: 'function_result',
+      session_id: 'session-1',
+      tx_signature: 'sig-1',
+      status: 'confirmed',
+      user_address: 'wallet-1',
+    });
+  });
+
+  it('sends user_address on function_reject', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await postReject('session-1', 'cancelled', 'wallet-1');
+
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0]?.[1]?.body as string);
+    expect(body).toMatchObject({
+      type: 'function_reject',
+      session_id: 'session-1',
+      reason: 'cancelled',
+      user_address: 'wallet-1',
+    });
   });
 
   it('throws ApiClientError for session_not_found', async () => {

@@ -143,6 +143,7 @@ describe('chat history endpoint', () => {
     const response = await proxyAgenticChat({
       type: 'get_history',
       session_id: sessionId,
+      user_address: 'wallet-1',
     });
 
     expect(response.status).toBe(200);
@@ -158,6 +159,33 @@ describe('chat history endpoint', () => {
         name: 'transfer',
       },
     });
+  });
+
+  it('returns session_not_found for get_history if wallet-bound session omits user_address', async () => {
+    createSession('session-history-no-user', 'thread-history-no-user', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'get_history',
+      session_id: 'session-history-no-user',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for get_history if wallet-bound session has mismatched user_address', async () => {
+    createSession('session-history-mismatch', 'thread-history-mismatch', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'get_history',
+      session_id: 'session-history-mismatch',
+      user_address: 'wallet-2',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
   });
 
   it('includes previous transcript when building model input for user message', async () => {
@@ -235,6 +263,7 @@ describe('chat history endpoint', () => {
     const historyResponse = await proxyAgenticChat({
       type: 'get_history',
       session_id: sessionId,
+      user_address: 'wallet-1',
     });
     const history = await historyResponse.json();
     expect(history.messages).toEqual(
@@ -246,6 +275,98 @@ describe('chat history endpoint', () => {
         }),
       ]),
     );
+  });
+});
+
+describe('ownership enforcement for sensitive actions', () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'test-key';
+  });
+
+  it('returns session_not_found for function_approve when wallet-bound session omits user_address', async () => {
+    createSession('session-approve-no-user', 'thread-approve-no-user', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_approve',
+      session_id: 'session-approve-no-user',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for function_approve when wallet-bound session mismatches', async () => {
+    createSession('session-approve-mismatch', 'thread-approve-mismatch', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_approve',
+      session_id: 'session-approve-mismatch',
+      user_address: 'wallet-2',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for function_result when wallet-bound session omits user_address', async () => {
+    createSession('session-result-no-user', 'thread-result-no-user', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_result',
+      session_id: 'session-result-no-user',
+      tx_signature: 'signature-no-user',
+      status: 'confirmed',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for function_result when wallet-bound session mismatches', async () => {
+    createSession('session-result-mismatch', 'thread-result-mismatch', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_result',
+      session_id: 'session-result-mismatch',
+      tx_signature: 'signature-mismatch',
+      status: 'confirmed',
+      user_address: 'wallet-2',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for function_reject when wallet-bound session omits user_address', async () => {
+    createSession('session-reject-no-user', 'thread-reject-no-user', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_reject',
+      session_id: 'session-reject-no-user',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns session_not_found for function_reject when wallet-bound session mismatches', async () => {
+    createSession('session-reject-mismatch', 'thread-reject-mismatch', 'wallet-1');
+
+    const response = await proxyAgenticChat({
+      type: 'function_reject',
+      session_id: 'session-reject-mismatch',
+      user_address: 'wallet-2',
+      reason: 'test',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
   });
 });
 

@@ -89,12 +89,14 @@ type ChatRequest =
   | {
       type: 'get_history';
       session_id: string;
+      user_address?: string;
     }
   | {
       type: 'function_approve';
       session_id: string;
       action_hash?: string;
       accept_risk?: boolean;
+      user_address?: string;
     }
   | {
       type: 'function_result';
@@ -102,11 +104,13 @@ type ChatRequest =
       tx_signature: string;
       status: 'submitted' | 'confirmed' | 'failed';
       error_message?: string;
+      user_address?: string;
     }
   | {
       type: 'function_reject';
       session_id: string;
       reason?: string;
+      user_address?: string;
     };
 
 type AgentTextMessage = {
@@ -452,6 +456,15 @@ async function persistSessionBestEffort(sessionId: string): Promise<void> {
   } catch (error) {
     console.warn('[chat] Unable to persist session externally:', error);
   }
+}
+
+function hasSessionWalletMismatch(session: SessionState, userAddress?: string): boolean {
+  const normalizedUserAddress = userAddress?.trim();
+  return Boolean(session.userAddress && (!normalizedUserAddress || session.userAddress !== normalizedUserAddress));
+}
+
+function sessionNotFoundResponse(): Response {
+  return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
 }
 
 function toHistoryPrompt(messages: SessionHistoryMessage[]): string {
@@ -1116,10 +1129,14 @@ export async function proxyAgenticChat(body: unknown): Promise<Response> {
 async function handleGetHistory(request: {
   type: 'get_history';
   session_id: string;
+  user_address?: string;
 }): Promise<Response> {
   const session = await getSessionWithExternalFallback(request.session_id);
   if (!session) {
-    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+    return sessionNotFoundResponse();
+  }
+  if (hasSessionWalletMismatch(session, request.user_address)) {
+    return sessionNotFoundResponse();
   }
 
   const pendingProposalMessage = session.pendingProposal
@@ -1164,6 +1181,10 @@ async function handleUserMessage(request: {
       // Get or create session
       let sessionId = request.session_id?.trim();
       let session = sessionId ? await getSessionWithExternalFallback(sessionId) : null;
+      if (session && hasSessionWalletMismatch(session, request.user_address)) {
+        sessionId = generateSessionId();
+        session = null;
+      }
 
       if (!session) {
         sessionId = sessionId || generateSessionId();
@@ -2236,6 +2257,7 @@ async function handleFunctionApprove(request: {
   session_id: string;
   action_hash?: string;
   accept_risk?: boolean;
+  user_address?: string;
 }): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
@@ -2243,7 +2265,10 @@ async function handleFunctionApprove(request: {
 
   const session = await getSessionWithExternalFallback(request.session_id);
   if (!session) {
-    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+    return sessionNotFoundResponse();
+  }
+  if (hasSessionWalletMismatch(session, request.user_address)) {
+    return sessionNotFoundResponse();
   }
 
   if (!session.pendingProposal) {
@@ -2835,7 +2860,7 @@ async function handleFunctionApprove(request: {
         pair: `${swapArgs.input_token}/${swapArgs.output_token}`,
         input_amount: swapArgs.input_amount,
         slippage_bps: swapArgs.slippage_bps ?? 100,
-        quote: (swapArgs as any).quote ?? null,
+        quote: swapArgs.quote ?? null,
       },
       transaction: {
         format: unsigned.isVersioned ? 'base64_versioned_transaction' : 'base64_legacy_transaction',
@@ -3062,6 +3087,7 @@ async function handleFunctionResult(request: {
   tx_signature: string;
   status: 'submitted' | 'confirmed' | 'failed';
   error_message?: string;
+  user_address?: string;
 }): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
@@ -3069,7 +3095,10 @@ async function handleFunctionResult(request: {
 
   const session = await getSessionWithExternalFallback(request.session_id);
   if (!session) {
-    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+    return sessionNotFoundResponse();
+  }
+  if (hasSessionWalletMismatch(session, request.user_address)) {
+    return sessionNotFoundResponse();
   }
 
   if (!session.pendingProposal) {
@@ -3247,6 +3276,7 @@ async function handleFunctionReject(request: {
   type: 'function_reject';
   session_id: string;
   reason?: string;
+  user_address?: string;
 }): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
@@ -3254,7 +3284,10 @@ async function handleFunctionReject(request: {
 
   const session = await getSessionWithExternalFallback(request.session_id);
   if (!session) {
-    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+    return sessionNotFoundResponse();
+  }
+  if (hasSessionWalletMismatch(session, request.user_address)) {
+    return sessionNotFoundResponse();
   }
 
   if (!session.pendingProposal) {

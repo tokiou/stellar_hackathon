@@ -130,7 +130,37 @@ describe('chatStore conversation persistence', () => {
   it('blocks approvals when wallet mismatches conversation wallet', () => {
     const state = useChatStore.getState();
     state.startNewConversation('wallet-1');
-    state.setCurrentWalletAddress('wallet-2');
+    state.setPendingProposal({
+      id: 'pending-1',
+      role: 'agent',
+      type: 'function_call',
+      function: {
+        name: 'transfer',
+        params: { amount: 1, token: 'SOL', recipient: '11111111111111111111111111111111' },
+      },
+      display: { summary: 'Transfer 1 SOL', fee_usd: 0 },
+      risk: { score: 10, level: 'low' },
+      timestamp: new Date().toISOString(),
+      uiState: 'pending',
+    });
+
+    state.setCurrentWalletAddress('wallet-1');
+    useChatStore.setState((prev) => {
+      const activeConversationId = prev.activeConversationId;
+      if (!activeConversationId) {
+        return {};
+      }
+      return {
+        activeWalletAddress: 'wallet-2',
+        conversationsById: {
+          ...prev.conversationsById,
+          [activeConversationId]: {
+            ...prev.conversationsById[activeConversationId],
+            lastWalletAddress: 'wallet-1',
+          },
+        },
+      };
+    });
 
     expect(state.getActiveConversationReadOnlyReason()).toBe('wallet_mismatch');
     expect(state.canApproveProposal()).toBe(false);
@@ -181,7 +211,7 @@ describe('chatStore conversation persistence', () => {
     expect(useChatStore.getState().getActiveConversationReadOnlyReason()).toBeNull();
   });
 
-  it('persists only session_id and activeWalletAddress', async () => {
+  it('persists session bootstrap scoped by wallet', async () => {
     const state = useChatStore.getState();
     state.setCurrentWalletAddress('wallet-1');
     state.setSessionId('session-minimal');
@@ -196,10 +226,43 @@ describe('chatStore conversation persistence', () => {
     const rawStored = inMemoryStorage[STORAGE_KEY];
     const stored = typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored;
 
-    expect(stored?.state?.sessionId).toBe('session-minimal');
+    expect(stored?.state?.sessionsByWallet).toMatchObject({
+      'wallet-1': {
+        sessionId: 'session-minimal',
+      },
+    });
     expect(stored?.state?.activeWalletAddress).toBe('wallet-1');
     expect(stored?.state?.messages).toBeUndefined();
     expect(stored?.state?.conversationsById).toBeUndefined();
     expect(stored?.state?.pendingProposal).toBeUndefined();
+  });
+
+  it('loads wallet-specific bootstrap for each wallet and restores per-wallet session id', async () => {
+    const state = useChatStore.getState();
+    state.setCurrentWalletAddress('wallet-a');
+    state.setSessionId('session-a');
+    state.setCurrentWalletAddress('wallet-b');
+    state.setSessionId('session-b');
+
+    const conversationForB = useChatStore.getState().sessionId;
+    expect(conversationForB).toBe('session-b');
+    state.setCurrentWalletAddress('wallet-a');
+    expect(useChatStore.getState().sessionId).toBe('session-a');
+  });
+
+  it('clears wallet bootstrap when session data is cleared', () => {
+    const state = useChatStore.getState();
+    state.setCurrentWalletAddress('wallet-1');
+    state.setSessionId('session-1');
+    state.addUserMessage('Mensaje inicial');
+
+    state.clearSessionData();
+
+    expect(useChatStore.getState().sessionId).toBeNull();
+    expect((useChatStore.getState().sessionsByWallet as Record<string, { sessionId: string }>)['wallet-1']).toBeUndefined();
+    expect(useChatStore.getState().messages).toHaveLength(1);
+    expect(useChatStore.getState().getActiveConversation()?.messages[0]).toMatchObject({
+      type: 'text',
+    });
   });
 });

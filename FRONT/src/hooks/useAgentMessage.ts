@@ -7,8 +7,6 @@ import {
   postReject,
   getHistory,
   ApiClientError,
-  type SwapGuardWarning,
-  type GuardRejection,
 } from '@/lib/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -47,7 +45,9 @@ function getApprovalFailureMessage(error: unknown): string {
 export function useAgentMessage() {
   const queryClient = useQueryClient();
   const threshold = useSettingsStore((state) => state.autoConfirmThresholdUsd);
-  const { address: userAddress, signAndSendPreparedTransaction } = useWallet();
+  const { address: userAddress, isResolved: walletResolved, signAndSendPreparedTransaction } = useWallet();
+  const hydratedWalletAddress = userAddress || null;
+  const activeWalletSnapshot = useChatStore((state) => state.activeWalletAddress);
 
   // Store actions
   const setCurrentWalletAddress = useChatStore((state) => state.setCurrentWalletAddress);
@@ -76,25 +76,44 @@ export function useAgentMessage() {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const hydrateSession = useCallback(async () => {
+    if (!walletResolved || !hydratedWalletAddress || hydratedWalletAddress !== activeWalletSnapshot) return;
     const sessionId = useChatStore.getState().sessionId;
     if (!sessionId) return;
-    if (hydratedSessionIds.has(sessionId) || hydratingSessionIds.has(sessionId)) return;
-    hydratingSessionIds.add(sessionId);
+    const hydrationKey = `${hydratedWalletAddress}:${sessionId}`;
+    if (hydratedSessionIds.has(hydrationKey) || hydratingSessionIds.has(hydrationKey)) return;
+    hydratingSessionIds.add(hydrationKey);
     try {
-      const history = await getHistory(sessionId);
+      const history = await getHistory(sessionId, hydratedWalletAddress);
+      const currentState = useChatStore.getState();
+      if (
+        currentState.sessionId !== sessionId ||
+        currentState.activeWalletAddress !== hydratedWalletAddress
+      ) {
+        return;
+      }
       hydrateSessionHistory(history.session_id, history.messages, history.pending_proposal);
-      hydratedSessionIds.add(sessionId);
+      hydratedSessionIds.add(hydrationKey);
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'session_not_found') {
-        hydratedSessionIds.delete(sessionId);
-        clearSessionData();
+        const currentState = useChatStore.getState();
+        if (
+          currentState.sessionId === sessionId &&
+          currentState.activeWalletAddress === hydratedWalletAddress
+        ) {
+          clearSessionData();
+        }
       } else {
         console.error('[chat] Failed to hydrate session history:', error);
       }
     } finally {
-      hydratingSessionIds.delete(sessionId);
+      hydratingSessionIds.delete(hydrationKey);
     }
-  }, [clearSessionData, hydrateSessionHistory]);
+  }, [activeWalletSnapshot, clearSessionData, hydratedWalletAddress, hydrateSessionHistory, walletResolved]);
+
+  useEffect(() => {
+    if (!walletResolved) return;
+    setCurrentWalletAddress(userAddress || null);
+  }, [setCurrentWalletAddress, userAddress, walletResolved]);
 
   useEffect(() => {
     void hydrateSession();
@@ -223,7 +242,7 @@ export function useAgentMessage() {
 
     try {
       console.log(`[chat] Approving proposal, acceptRisk=${acceptRisk}`);
-      const response = await postApprove(currentSessionId, acceptRisk);
+      const response = await postApprove(currentSessionId, acceptRisk, userAddress);
       if (response.messages.length > 0) {
         addAgentMessages(response.messages);
       }
@@ -296,9 +315,11 @@ export function useAgentMessage() {
       }
 
       setProposalUiState('submitted');
-      postFunctionResult(currentSessionId, signResult.tx_signature, 'submitted').catch((callbackError) => {
-        console.warn('[chat] Optional function_result submitted callback failed:', callbackError);
-      });
+      postFunctionResult(currentSessionId, signResult.tx_signature, 'submitted', undefined, userAddress).catch(
+        (callbackError) => {
+          console.warn('[chat] Optional function_result submitted callback failed:', callbackError);
+        },
+      );
 
       completeProposal('success', {
         status: 'success',
@@ -307,7 +328,13 @@ export function useAgentMessage() {
 
       await queryClient.invalidateQueries({ queryKey: ['wallet'] });
       try {
-        const confirmedResponse = await postFunctionResult(currentSessionId, signResult.tx_signature, 'confirmed');
+        const confirmedResponse = await postFunctionResult(
+          currentSessionId,
+          signResult.tx_signature,
+          'confirmed',
+          undefined,
+          userAddress
+        );
         if (confirmedResponse.messages.length > 0) {
           addAgentMessages(confirmedResponse.messages);
         }
@@ -332,7 +359,7 @@ export function useAgentMessage() {
         setProposalUiState('cancelled');
         setPendingProposal(null);
         setStatus('idle');
-        postReject(currentSessionId, errorMessage).catch((rejectError) => {
+        postReject(currentSessionId, errorMessage, userAddress).catch((rejectError) => {
           console.warn('[chat] Optional reject cleanup failed:', rejectError);
         });
         return;
@@ -371,7 +398,7 @@ export function useAgentMessage() {
     setCurrentWalletAddress(userAddress || null);
 
     try {
-      const response = await postReject(currentSessionId);
+      const response = await postReject(currentSessionId, undefined, userAddress);
       if (!response.messages.length) return;
       if (response.messages.length > 0) {
         addAgentMessages(response.messages);

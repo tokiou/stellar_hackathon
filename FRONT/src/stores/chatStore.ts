@@ -20,7 +20,7 @@ import type {
 } from '@/types/chat';
 
 const CHAT_STORE_NAME = 'wallet-copilot-chat-history';
-const CHAT_STORE_SCHEMA_VERSION = 2;
+const CHAT_STORE_SCHEMA_VERSION = 3;
 const MAX_CONVERSATIONS = 20;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const inMemorySessionStorage: Record<string, string> = {};
@@ -76,6 +76,39 @@ function safeIsoDate(value: string): string {
 
 function toNullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function normalizeWalletAddress(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildWalletSessionBootstrap(sessionId: string | null): PersistedWalletChatBootstrap {
+  return {
+    sessionId,
+    updatedAt: isoNow(),
+  };
+}
+
+function upsertWalletSessionBootstrap(
+  map: Record<string, PersistedWalletChatBootstrap>,
+  walletAddress: string | null,
+  sessionId: string | null,
+): Record<string, PersistedWalletChatBootstrap> {
+  const safeWalletAddress = normalizeWalletAddress(walletAddress);
+  if (!safeWalletAddress) return map;
+
+  if (!sessionId) {
+    const next = { ...map };
+    delete next[safeWalletAddress];
+    return next;
+  }
+
+  return {
+    ...map,
+    [safeWalletAddress]: buildWalletSessionBootstrap(sessionId),
+  };
 }
 
 function toConversationStatus(conversation: PersistedConversation, now = Date.now()): ConversationSessionStatus {
@@ -206,8 +239,14 @@ type PersistedStoreShape = {
   activeConversationId: string | null;
   activeWalletAddress: string | null;
   sessionId: string | null;
+  sessionsByWallet?: Record<string, { sessionId: string | null; updatedAt: string }>;
   conversationsById: Record<string, PersistedConversation>;
   conversationOrder: string[];
+};
+
+type PersistedWalletChatBootstrap = {
+  sessionId: string | null;
+  updatedAt: string;
 };
 
 export type SwapGuardWarningState = {
@@ -230,6 +269,7 @@ type ChatStore = {
   schemaVersion: number;
   activeConversationId: string | null;
   activeWalletAddress: string | null;
+  sessionsByWallet: Record<string, PersistedWalletChatBootstrap>;
   conversationsById: Record<string, PersistedConversation>;
   conversationOrder: string[];
   sessionId: string | null;
@@ -255,6 +295,8 @@ type ChatStore = {
   clearHistory: () => void;
   ensureConversationForInput: (walletAddress: string | null) => void;
   setCurrentWalletAddress: (walletAddress: string | null) => void;
+  setSessionIdForCurrentWallet: (walletAddress: string | null, sessionId: string | null) => void;
+  clearCurrentWalletSessionId: (walletAddress: string | null) => void;
   setConversationExpired: () => void;
   // Legacy alias for compatibility
   clearChat: () => void;
@@ -345,7 +387,29 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
     typeof (baseState as { sessionId?: unknown } | null)?.sessionId === 'string'
       ? (baseState as { sessionId: string }).sessionId
       : null;
-  const migratedActiveWalletAddress = toNullableString(baseState.activeWalletAddress);
+  const migratedActiveWalletAddress = normalizeWalletAddress(toNullableString(baseState.activeWalletAddress));
+  const migratedSessionsByWallet: Record<string, PersistedWalletChatBootstrap> = {};
+  const rawSessionsByWallet = baseState?.sessionsByWallet;
+  if (rawSessionsByWallet && typeof rawSessionsByWallet === 'object') {
+    for (const [walletAddress, entry] of Object.entries(rawSessionsByWallet as Record<string, unknown>)) {
+      const normalizedWalletAddress = normalizeWalletAddress(walletAddress);
+      if (!normalizedWalletAddress || !entry || typeof entry !== 'object') continue;
+      const candidate = entry as Partial<PersistedWalletChatBootstrap>;
+      const sessionId = typeof candidate.sessionId === 'string' && candidate.sessionId.trim() ? candidate.sessionId.trim() : null;
+      if (!sessionId) continue;
+      migratedSessionsByWallet[normalizedWalletAddress] = {
+        sessionId,
+        updatedAt: safeIsoDate(typeof candidate.updatedAt === 'string' ? candidate.updatedAt : safeNow),
+      };
+    }
+  }
+
+  if (migratedActiveWalletAddress && migratedSessionId) {
+    migratedSessionsByWallet[migratedActiveWalletAddress] = {
+      sessionId: migratedSessionId,
+      updatedAt: safeNow,
+    };
+  }
 
   if (
     baseState &&
@@ -391,7 +455,8 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
         schemaVersion: CHAT_STORE_SCHEMA_VERSION,
         activeConversationId: fallbackConversation.id,
         activeWalletAddress: migratedActiveWalletAddress,
-        sessionId: migratedSessionId,
+        sessionsByWallet: migratedSessionsByWallet,
+        sessionId: null,
         conversationsById: nextById,
         conversationOrder: [fallbackConversation.id],
       };
@@ -407,7 +472,8 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
         schemaVersion: CHAT_STORE_SCHEMA_VERSION,
         activeConversationId: first,
         activeWalletAddress: migratedActiveWalletAddress,
-        sessionId: migratedSessionId,
+        sessionsByWallet: migratedSessionsByWallet,
+        sessionId: null,
         conversationsById: nextById,
         conversationOrder: normalizedOrder,
       };
@@ -417,7 +483,8 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
       schemaVersion: CHAT_STORE_SCHEMA_VERSION,
       activeConversationId,
       activeWalletAddress: migratedActiveWalletAddress,
-      sessionId: migratedSessionId,
+      sessionsByWallet: migratedSessionsByWallet,
+      sessionId: null,
       conversationsById: nextById,
       conversationOrder: normalizedOrder,
     };
@@ -457,7 +524,8 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
       schemaVersion: CHAT_STORE_SCHEMA_VERSION,
       activeConversationId: finalState.id,
       activeWalletAddress: null,
-      sessionId: migratedSessionId,
+      sessionsByWallet: migratedSessionsByWallet,
+      sessionId: null,
       conversationsById: { [finalState.id]: finalState },
       conversationOrder: [finalState.id],
     };
@@ -471,6 +539,7 @@ function migratePersistedState(rawState: unknown): PersistedStoreShape {
     schemaVersion: CHAT_STORE_SCHEMA_VERSION,
     activeConversationId: initialConversation.id,
     activeWalletAddress: null,
+    sessionsByWallet: {},
     sessionId: null,
     conversationsById: { [initialConversation.id]: initialConversation },
     conversationOrder: [initialConversation.id],
@@ -526,7 +595,10 @@ function sanitizeIncomingState(rawState: unknown): PersistedStoreShape {
     schemaVersion: CHAT_STORE_SCHEMA_VERSION,
     activeConversationId,
     activeWalletAddress: migrated.activeWalletAddress,
-    sessionId: migrated.sessionId,
+    sessionsByWallet: migrated.sessionsByWallet || {},
+    sessionId: migrated.activeWalletAddress
+      ? normalizeWalletAddress(migrated.sessionsByWallet?.[migrated.activeWalletAddress]?.sessionId)
+      : null,
     conversationsById: pruned.conversationsById,
     conversationOrder: pruned.conversationOrder,
   };
@@ -543,6 +615,7 @@ export const useChatStore = create<ChatStore>()(
         schemaVersion: CHAT_STORE_SCHEMA_VERSION,
         activeConversationId: baseConversation.id,
         activeWalletAddress: null,
+        sessionsByWallet: {},
         conversationsById: { [baseConversation.id]: baseConversation },
         conversationOrder: [baseConversation.id],
         sessionId: null,
@@ -589,17 +662,117 @@ export const useChatStore = create<ChatStore>()(
         },
 
         setCurrentWalletAddress: (walletAddress) => {
+          const safeWalletAddress = normalizeWalletAddress(walletAddress);
           set((state) => {
             const now = Date.now();
+            const activeConversation =
+              state.activeConversationId ? state.conversationsById[state.activeConversationId] : null;
+            const shouldResetConversation =
+              !activeConversation ||
+              normalizeWalletAddress(activeConversation.lastWalletAddress) !== safeWalletAddress;
+
             const conversationsById = Object.fromEntries(
               Object.entries(state.conversationsById).map(([id, conversation]) => [
                 id,
-                syncConversationMetadata(conversation, walletAddress, now),
+                syncConversationMetadata(conversation, safeWalletAddress, now),
               ]),
             );
+
+            const bootstrapSessionId = safeWalletAddress
+              ? state.sessionsByWallet[safeWalletAddress]?.sessionId || null
+              : null;
+
+            if (shouldResetConversation) {
+              const nextConversation = syncConversationMetadata(
+                makeConversation({ walletAddress: safeWalletAddress }),
+                safeWalletAddress,
+                now
+              );
+              const conversationOrder = ensureConversationOrder(state.conversationOrder, nextConversation.id);
+              const pruned = pruneConversations(
+                {
+                  ...conversationsById,
+                  [nextConversation.id]: {
+                    ...nextConversation,
+                    sessionId: bootstrapSessionId,
+                  },
+                },
+                conversationOrder
+              );
+
+              return {
+                activeWalletAddress: safeWalletAddress,
+                sessionId: bootstrapSessionId,
+                conversationsById: {
+                  ...pruned.conversationsById,
+                  [nextConversation.id]: {
+                    ...pruned.conversationsById[nextConversation.id],
+                    sessionId: bootstrapSessionId,
+                  },
+                },
+                conversationOrder: pruned.conversationOrder,
+                activeConversationId: nextConversation.id,
+                messages: [makeWelcomeMessage()],
+                pendingProposal: null,
+                proposalUiState: null,
+                status: 'idle',
+                streamingContent: '',
+              };
+            }
+
             return {
-              activeWalletAddress: walletAddress,
+              activeWalletAddress: safeWalletAddress,
+              sessionId: bootstrapSessionId || state.sessionId,
               conversationsById,
+            };
+          });
+        },
+
+        setSessionIdForCurrentWallet: (walletAddress, sessionId) => {
+          set((state) => ({
+            sessionId,
+            sessionsByWallet: upsertWalletSessionBootstrap(state.sessionsByWallet, walletAddress, sessionId),
+            conversationsById:
+              !state.activeConversationId || !state.conversationsById[state.activeConversationId]
+                ? state.conversationsById
+                : {
+                    ...state.conversationsById,
+                    [state.activeConversationId]: {
+                      ...state.conversationsById[state.activeConversationId],
+                      sessionId,
+                      updatedAt: isoNow(),
+                    },
+                  },
+          }));
+        },
+
+        clearCurrentWalletSessionId: (walletAddress) => {
+          const safeWalletAddress = normalizeWalletAddress(walletAddress);
+          if (!safeWalletAddress) return;
+
+          set((state) => {
+            const nextSessionsByWallet = upsertWalletSessionBootstrap(state.sessionsByWallet, safeWalletAddress, null);
+            if (state.activeWalletAddress !== safeWalletAddress) {
+              return {
+                sessionsByWallet: nextSessionsByWallet,
+              };
+            }
+
+            const activeConversation =
+              state.activeConversationId ? state.conversationsById[state.activeConversationId] : null;
+
+            return {
+              sessionId: null,
+              sessionsByWallet: nextSessionsByWallet,
+              conversationsById: activeConversation
+                ? {
+                    ...state.conversationsById,
+                    [activeConversation.id]: {
+                      ...activeConversation,
+                      sessionId: null,
+                    },
+                  }
+                : state.conversationsById,
             };
           });
         },
@@ -791,8 +964,14 @@ export const useChatStore = create<ChatStore>()(
             if (!state.activeConversationId) return {};
             const activeConversation = state.conversationsById[state.activeConversationId];
             if (!activeConversation) return {};
+            const safeWalletAddress = normalizeWalletAddress(state.activeWalletAddress);
             return {
               sessionId,
+              sessionsByWallet: upsertWalletSessionBootstrap(
+                state.sessionsByWallet,
+                safeWalletAddress,
+                sessionId
+              ),
               conversationsById: {
                 ...state.conversationsById,
                 [state.activeConversationId]: {
@@ -855,6 +1034,12 @@ export const useChatStore = create<ChatStore>()(
             if (!state.activeConversationId) return {};
             const activeConversation = state.conversationsById[state.activeConversationId];
             if (!activeConversation) return {};
+            const activeWalletAddress = normalizeWalletAddress(state.activeWalletAddress);
+            const nextSessionsByWallet = upsertWalletSessionBootstrap(
+              state.sessionsByWallet,
+              activeWalletAddress,
+              null
+            );
             const now = isoNow();
             const refreshedConversation: PersistedConversation = {
               ...activeConversation,
@@ -867,6 +1052,7 @@ export const useChatStore = create<ChatStore>()(
             };
             return {
               sessionId: null,
+              sessionsByWallet: nextSessionsByWallet,
               messages: refreshedConversation.messages,
               pendingProposal: null,
               proposalUiState: null,
@@ -1224,7 +1410,7 @@ export const useChatStore = create<ChatStore>()(
         return {
           schemaVersion: CHAT_STORE_SCHEMA_VERSION,
           activeWalletAddress: state.activeWalletAddress,
-          sessionId: state.sessionId,
+          sessionsByWallet: state.sessionsByWallet,
         };
       },
     }
