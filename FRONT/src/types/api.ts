@@ -16,6 +16,23 @@ export type RiskInfo = {
   score: number;
   level: 'low' | 'medium' | 'critical';
   reasons?: string[];
+  requiresExtraConfirmation?: boolean;
+  walletSafety?: {
+    decision: 'ALLOW' | 'WARN' | 'REJECT';
+    riskLevel: 'low' | 'medium' | 'critical';
+    hardReject: boolean;
+    requiresExtraConfirmation: boolean;
+    reasons: {
+      code: string;
+      severity: 'info' | 'warning' | 'critical';
+      message: string;
+      source: 'local' | 'onchain' | 'offchain' | 'policy' | 'onchain_approval';
+    }[];
+    sources?: {
+      provider: string;
+      status: 'ok' | 'missing' | 'stale' | 'error';
+    }[];
+  };
 };
 
 export type ExecuteInfo = {
@@ -96,6 +113,18 @@ export type FunctionExecution = {
   expected_user_address?: string;
 };
 
+export type OnchainGuardrail = {
+  action_type: string;
+  action_hash: string;
+  policy_pda: string;
+  action_approval_pda: string;
+  wallet_safety_attestation_pda: string;
+  action_expires_at: string;
+  action_created_at: string;
+  action_amount_lamports: number;
+  action_recipient: string;
+};
+
 export type StakeParams = {
   amount: number;
   validator: string;
@@ -122,6 +151,7 @@ export type AgentMessage =
       };
       risk: RiskInfo;
       execution?: FunctionExecution;
+      onchain_guardrail?: OnchainGuardrail;
       timestamp: string;
     }
   | {
@@ -149,6 +179,7 @@ export type AgentMessageResponse = {
     recent_blockhash: string;
     last_valid_block_height: number;
     network: 'devnet' | 'mainnet-beta';
+    onchain_guardrail?: OnchainGuardrail;
   };
 };
 

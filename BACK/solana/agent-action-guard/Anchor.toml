@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-agent_action_guard = "FcMZYCXAkBvaFazQutSJWqtq4nUWKfbBQGEeyvvazgQ"
+agent_action_guard = "9a7RVaEU5pnrVTodHHn6NHnfgdWisXv6kgJJskDxxsSk"
 
 [registry]
 url = "https://api.apr.dev"

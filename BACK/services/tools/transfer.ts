@@ -7,6 +7,7 @@
 import { tool } from '@langchain/core/tools';
 import { PublicKey } from '@solana/web3.js';
 import { z } from 'zod';
+import type { WalletSafetyDecisionResult } from '../walletSafetyValidation';
 
 function isValidSolanaAddress(value: string): boolean {
   try {
@@ -15,6 +16,16 @@ function isValidSolanaAddress(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function normalizeTransferToken(token?: string): string {
+  const cleaned = (token || 'SOL').trim().replace(/[.,;:!?]+$/g, '').toUpperCase() || 'SOL';
+  if (cleaned === 'SOLA' || cleaned === 'SOLANA') return 'SOL';
+  return cleaned;
+}
+
+export function isSupportedTransferToken(token?: string): boolean {
+  return normalizeTransferToken(token) === 'SOL';
 }
 
 // Unified transfer params matching frontend contract
@@ -40,6 +51,14 @@ export type TransferToolResult = {
   status: 'prepared' | 'denied';
   reason: string;
   preparedAction: TransferPreparedAction | null;
+  walletSafety?: WalletSafetyDecisionResult;
+};
+
+export type TransferRiskAssessment = {
+  score: number;
+  level: 'low' | 'medium' | 'critical';
+  reasons: string[];
+  walletSafety?: WalletSafetyDecisionResult;
 };
 
 /**
@@ -52,6 +71,7 @@ export function prepareTransferResult(
   fromWallet: string
 ): TransferToolResult {
   const { amount, token, recipient, memo } = params;
+  const normalizedToken = normalizeTransferToken(token);
 
   if (!fromWallet || !isValidSolanaAddress(fromWallet)) {
     return {
@@ -77,6 +97,14 @@ export function prepareTransferResult(
     };
   }
 
+  if (!isSupportedTransferToken(normalizedToken)) {
+    return {
+      status: 'denied',
+      reason: 'UNSUPPORTED_TOKEN',
+      preparedAction: null,
+    };
+  }
+
   return {
     status: 'prepared',
     reason: 'READY_FOR_USER_APPROVAL',
@@ -85,7 +113,7 @@ export function prepareTransferResult(
       fromWallet,
       toWallet: recipient,
       amount,
-      token: token || 'SOL',
+      token: normalizedToken,
       memo,
       requiresUserSignature: true,
       executedOnChain: false,
@@ -98,45 +126,50 @@ export function prepareTransferResult(
  */
 export function generateTransferDisplay(params: TransferParams): {
   summary: string;
-  fee_usd?: number;
+  fee_usd: number;
   provider: string;
 } {
   const shortRecipient = `${params.recipient.slice(0, 4)}...${params.recipient.slice(-4)}`;
   return {
-    summary: `Enviar ${params.amount} ${params.token || 'SOL'} a ${shortRecipient}`,
+    summary: `Enviar ${params.amount} ${normalizeTransferToken(params.token)} a ${shortRecipient}`,
+    fee_usd: 0.01,
     provider: 'Wallet Copilot',
   };
 }
 
 /**
  * Generate risk assessment for a transfer
- * TODO: Integrate with real risk scoring service
  */
-export function assessTransferRisk(params: TransferParams): {
-  score: number;
-  level: 'low' | 'medium' | 'critical';
-  reasons: string[];
-} {
+export function assessTransferRisk(params: TransferParams, walletSafety?: WalletSafetyDecisionResult): TransferRiskAssessment {
+  const normalizedAmount = Number(params.amount) || 0;
+  const normalizedToken = normalizeTransferToken(params.token);
   const reasons: string[] = [];
-  let score = 30; // Base score
+  let score = 10;
 
-  // Check amount thresholds
-  if (params.amount > 10) {
-    score += 30;
-    reasons.push('Monto elevado');
-  } else if (params.amount > 1) {
+  if (normalizedAmount > 10) {
+    score += 35;
+    reasons.push(`Monto alto (${normalizedAmount} ${normalizedToken})`);
+  } else if (normalizedAmount > 1) {
     score += 15;
-    reasons.push('Monto moderado');
+    reasons.push(`Monto moderado (${normalizedAmount} ${normalizedToken})`);
+  } else {
+    reasons.push(`Monto bajo (${normalizedAmount} ${normalizedToken})`);
   }
 
-  // New recipient (we'd check history in real implementation)
-  score += 10;
-  reasons.push('Verifica la dirección de destino');
+  reasons.push('Dirección de destino con formato Solana válido');
+
+  if (walletSafety) {
+    if (walletSafety.decision === 'REJECT') {
+      score = Math.max(score, 95);
+    } else if (walletSafety.decision === 'WARN') {
+      score = Math.max(score, 55);
+    }
+  }
 
   const level: 'low' | 'medium' | 'critical' =
     score >= 70 ? 'critical' : score >= 40 ? 'medium' : 'low';
 
-  return { score: Math.min(score, 100), level, reasons };
+  return { score: Math.min(score, 100), level, reasons, walletSafety };
 }
 
 /**
@@ -152,7 +185,7 @@ export const transferTool = tool(
       toolName: 'transfer',
       params: {
         amount: input.amount,
-        token: input.token || 'SOL',
+        token: normalizeTransferToken(input.token),
         recipient: input.recipient,
         memo: input.memo,
       },
@@ -160,10 +193,10 @@ export const transferTool = tool(
   },
   {
     name: 'transfer',
-    description:
-      'Prepara una transferencia de SOL o tokens a otra wallet de Solana. ' +
+  description:
+      'Prepara una transferencia de SOL a otra wallet de Solana. ' +
       'NO ejecuta la transferencia on-chain. Retorna una acción preparada que requiere aprobación del usuario. ' +
-      'Usa esta herramienta cuando el usuario quiera enviar/transferir SOL o tokens a otra dirección.',
+      'Usa esta herramienta cuando el usuario quiera enviar/transferir SOL a otra dirección.',
     schema: z.object({
       amount: z.number().positive().describe('Cantidad a transferir'),
       token: z.string().optional().describe('Símbolo del token (default: SOL)'),

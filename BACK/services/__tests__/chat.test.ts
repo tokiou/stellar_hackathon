@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { getAgentToolNames, isReadOnlyAgentTool, normalizeMessages } from '../chat';
+import {
+  getAgentToolNames,
+  evaluateSolTransferFunding,
+  isReadOnlyAgentTool,
+  maskSolanaAddressesForModel,
+  normalizeMessages,
+  parseDirectTransferIntent,
+  restoreMaskedSolanaAddressesInToolArgs,
+} from '../chat';
 import { prepareTransferResult } from '../tools/transfer';
 
 describe('chat agent tool catalog', () => {
@@ -38,6 +46,69 @@ describe('normalizeMessages', () => {
     expect(normalizeMessages('not an array')).toBeNull();
     expect(normalizeMessages(null)).toBeNull();
     expect(normalizeMessages(undefined)).toBeNull();
+  });
+});
+
+describe('Solana address masking', () => {
+  it('masks valid Solana addresses before sending text to the model and restores tool args', () => {
+    const recipient = 'bEsfmEAaTA98rLftyi2jZ4XAzCBbqBvrJPKNW6rYJgp';
+    const masked = maskSolanaAddressesForModel(`Manda 5 SOL a ${recipient}`);
+
+    expect(masked.content).toBe('Manda 5 SOL a SOLANA_ADDRESS_1');
+    expect(masked.addressByPlaceholder.SOLANA_ADDRESS_1).toBe(recipient);
+
+    const restored = restoreMaskedSolanaAddressesInToolArgs(
+      '{"amount":5,"token":"SOL","recipient":"SOLANA_ADDRESS_1"}',
+      masked.addressByPlaceholder,
+    );
+    expect(restored).toBe(`{"amount":5,"token":"SOL","recipient":"${recipient}"}`);
+  });
+
+  it('masks address-like Solana strings even when they are malformed', () => {
+    const malformedRecipient = 'iB1mdEmZixSFXKL9AoujhFfuizC8hKYCFMBzcADEQq';
+    const masked = maskSolanaAddressesForModel(`Manda 1 SOL ${malformedRecipient}`);
+
+    expect(masked.content).toBe('Manda 1 SOL SOLANA_ADDRESS_1');
+    expect(masked.addressByPlaceholder.SOLANA_ADDRESS_1).toBe(malformedRecipient);
+  });
+});
+
+describe('parseDirectTransferIntent', () => {
+  it('parses simple transfer requests without requiring the model', () => {
+    const recipient = 'bEsfmEAaTA98rLftyi2jZ4XAzCBbqBvrJPKNW6rYJgp';
+    const parsed = parseDirectTransferIntent(`Manda 1 SOL ${recipient}`);
+
+    expect(parsed).toMatchObject({
+      matched: true,
+      amount: 1,
+      token: 'SOL',
+      recipient,
+      recipientValid: true,
+    });
+  });
+
+  it('detects malformed recipient addresses before calling the model', () => {
+    const parsed = parseDirectTransferIntent('Manda 1 SOL iB1mdEmZixSFXKL9AoujhFfuizC8hKYCFMBzcADEQq');
+
+    expect(parsed).toMatchObject({
+      matched: true,
+      amount: 1,
+      token: 'SOL',
+      recipientValid: false,
+    });
+  });
+
+  it('normalizes common SOL typos in direct transfer requests', () => {
+    const recipient = 'iB1mdEmZixSFXKL9AoujhFfuizC8hKYCFMBzcADEQq2';
+    const parsed = parseDirectTransferIntent(`Manda 15 sola. ${recipient}`);
+
+    expect(parsed).toMatchObject({
+      matched: true,
+      amount: 15,
+      token: 'SOL',
+      recipient,
+      recipientValid: true,
+    });
   });
 });
 
@@ -108,6 +179,26 @@ describe('prepareTransferResult', () => {
     expect(result.preparedAction?.token).toBe('SOL');
   });
 
+  it('normalizes SOLA typo to SOL', () => {
+    const result = prepareTransferResult(
+      { amount: 1, token: 'sola', recipient: validToWallet },
+      validFromWallet
+    );
+
+    expect(result.status).toBe('prepared');
+    expect(result.preparedAction?.token).toBe('SOL');
+  });
+
+  it('denies unsupported tokens before creating a transfer proposal', () => {
+    const result = prepareTransferResult(
+      { amount: 1, token: 'USDC', recipient: validToWallet },
+      validFromWallet
+    );
+
+    expect(result.status).toBe('denied');
+    expect(result.reason).toBe('UNSUPPORTED_TOKEN');
+  });
+
   it('includes memo when provided', () => {
     const result = prepareTransferResult(
       { amount: 1, token: 'SOL', recipient: validToWallet, memo: 'Test memo' },
@@ -116,5 +207,37 @@ describe('prepareTransferResult', () => {
 
     expect(result.status).toBe('prepared');
     expect(result.preparedAction?.memo).toBe('Test memo');
+  });
+});
+
+describe('evaluateSolTransferFunding', () => {
+  it('denies a SOL transfer when balance cannot cover amount and guardrail overhead', () => {
+    const result = evaluateSolTransferFunding({
+      balanceLamports: 5_000_000_000,
+      amountLamports: 5_000_000_000,
+      policyRentLamports: 1_000_000,
+      approvalRentLamports: 2_000_000,
+      feeBufferLamports: 50_000,
+      policyAccountMissing: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.requiredLamports).toBe(5_003_050_000);
+    expect(result.missingLamports).toBe(3_050_000);
+  });
+
+  it('does not include policy rent when the wallet policy already exists', () => {
+    const result = evaluateSolTransferFunding({
+      balanceLamports: 5_002_050_000,
+      amountLamports: 5_000_000_000,
+      policyRentLamports: 1_000_000,
+      approvalRentLamports: 2_000_000,
+      feeBufferLamports: 50_000,
+      policyAccountMissing: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.requiredLamports).toBe(5_002_050_000);
+    expect(result.overheadLamports).toBe(2_050_000);
   });
 });

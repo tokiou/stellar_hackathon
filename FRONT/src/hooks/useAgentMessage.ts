@@ -16,6 +16,29 @@ type SignAndSendError = Error & {
   code?: string;
 };
 
+function getApprovalFailureMessage(error: unknown): string {
+  if (error instanceof ApiClientError) {
+    const messages: Record<string, string> = {
+      ONCHAIN_ACTION_APPROVAL_ACCOUNT_MISSING: 'La aprobación on-chain ya no está disponible. Regenerá la propuesta.',
+      ONCHAIN_ACTION_APPROVAL_EXPIRED: 'La aprobación on-chain expiró. Regenerá la propuesta.',
+      ONCHAIN_ACTION_APPROVAL_ALREADY_EXECUTED: 'Esta aprobación ya fue usada. Regenerá la propuesta.',
+      ONCHAIN_ACTION_APPROVAL_REVOKED: 'La aprobación on-chain fue revocada. Regenerá la propuesta.',
+      ONCHAIN_ACTION_APPROVAL_RECIPIENT_MISMATCH: 'El destino no coincide con la aprobación on-chain.',
+      ONCHAIN_ACTION_APPROVAL_AMOUNT_MISMATCH: 'El monto no coincide con la aprobación on-chain.',
+      ONCHAIN_WALLET_SAFETY_ATTESTATION_ACCOUNT_MISSING: 'La validación de seguridad on-chain no está disponible. Regenerá la propuesta.',
+      ONCHAIN_WALLET_SAFETY_ATTESTATION_EXPIRED: 'La validación de seguridad on-chain expiró. Regenerá la propuesta.',
+      ONCHAIN_WALLET_SAFETY_ATTESTATION_RECIPIENT_MISMATCH: 'El destino no coincide con la validación de seguridad on-chain.',
+      ONCHAIN_WALLET_SAFETY_ATTESTATION_ACTION_HASH_MISMATCH: 'La validación on-chain no corresponde a esta propuesta.',
+      onchain_guard_context_missing: 'Falta contexto del guardrail on-chain. Regenerá la propuesta.',
+      action_hash_mismatch: 'La propuesta cambió desde que fue creada. Regenerá la propuesta.',
+      pending_proposal_expired: 'La propuesta expiró. Generá una nueva.',
+    };
+    return messages[error.code] || error.message;
+  }
+
+  return error instanceof Error ? error.message : 'Error al aprobar la transferencia';
+}
+
 export function useAgentMessage() {
   const queryClient = useQueryClient();
   const threshold = useSettingsStore((state) => state.autoConfirmThresholdUsd);
@@ -197,7 +220,7 @@ export function useAgentMessage() {
         console.warn('[chat] Optional function_result confirmed callback failed:', callbackError);
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Error al aprobar la transferencia';
+      const errorMessage = getApprovalFailureMessage(error);
       const errorCode = (error as SignAndSendError)?.code;
       const rejectedByUser = errorCode === 'user_rejected' || /rejected|denied/i.test(errorMessage);
       const shouldCancel =
