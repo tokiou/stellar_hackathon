@@ -1,6 +1,6 @@
-use anchor_lang::prelude::*;
+declare_id!("9a7RVaEU5pnrVTodHHn6NHnfgdWisXv6kgJJskDxxsSk");
 
-declare_id!("ETLBetVBpHeG3pKKqpCaRQYfQ2opMNEKCsrQUyqgyg6s");
+use anchor_lang::prelude::*;
 
 // Pyth price account structure (simplified for reading)
 // Based on pyth-sdk-solana PriceAccount layout
@@ -43,7 +43,7 @@ fn read_pyth_price(data: &[u8]) -> Result<(i64, u64, i32, i64)> {
     let conf = u64::from_le_bytes(data[216..224].try_into().unwrap());
     // Status (u32) at 224
     let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
-    
+
     // Check status is Trading (1)
     if status != 1 {
         return err!(GuardError::OracleDataStale);
@@ -87,11 +87,46 @@ pub mod agent_action_guard {
         Ok(())
     }
 
+    pub fn initialize_attestor_config(ctx: Context<InitializeAttestorConfig>, initial_attestor: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.attestor_config;
+        config.admin = ctx.accounts.admin.key();
+        config.attestor = initial_attestor;
+        config.bump = ctx.bumps.attestor_config;
+        Ok(())
+    }
+
+    pub fn update_attestor(ctx: Context<UpdateAttestor>, attestor: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.attestor_config;
+        require_keys_eq!(config.admin, ctx.accounts.admin.key(), GuardError::Unauthorized);
+        config.attestor = attestor;
+        Ok(())
+    }
+
+    pub fn upsert_wallet_safety_attestation(
+        ctx: Context<UpsertWalletSafetyAttestation>,
+        params: UpsertWalletSafetyAttestationParams,
+    ) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        require!(params.expires_at > now, GuardError::AttestationExpired);
+
+        let attestation = &mut ctx.accounts.wallet_safety_attestation;
+        attestation.user = params.user;
+        attestation.recipient = params.recipient;
+        attestation.action_hash = params.action_hash;
+        attestation.attestor = ctx.accounts.attestor.key();
+        attestation.issued_at = now;
+        attestation.expires_at = params.expires_at;
+        attestation.risk_score_bps = params.risk_score_bps;
+        attestation.active = true;
+        attestation.bump = ctx.bumps.wallet_safety_attestation;
+        Ok(())
+    }
+
     pub fn create_action_approval(ctx: Context<CreateActionApproval>, params: CreateActionApprovalParams) -> Result<()> {
         let policy = &ctx.accounts.user_policy;
         require!(policy.enabled, GuardError::PolicyDisabled);
 
-        if params.action_type == ActionType::TransferSol as u8 {
+        if params.action_type == ActionType::TransferSol as u8 || params.action_type == ActionType::TransferSolGuarded as u8 {
             require!(params.input_amount <= policy.max_transfer_lamports, GuardError::TransferAmountTooHigh);
         }
 
@@ -153,7 +188,7 @@ pub mod agent_action_guard {
         require_keys_eq!(approval.oracle_feed, ctx.accounts.oracle_price_feed.key(), GuardError::OracleFeedMismatch);
 
         let current_time = Clock::get()?.unix_timestamp;
-        
+
         // Read Pyth price data directly from account
         let oracle_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
         let (price_value, price_conf, price_expo, price_timestamp) = read_pyth_price(&oracle_data)?;
@@ -181,6 +216,38 @@ pub mod agent_action_guard {
         require!(price_abs > 0, GuardError::InvalidOraclePrice);
         let conf_bps = ((price_conf as i128) * 10_000 / price_abs) as u64;
         require!(conf_bps <= max_confidence_bps, GuardError::OracleConfidenceTooHigh);
+
+        approval.executed = true;
+        Ok(())
+    }
+
+    pub fn guarded_transfer(ctx: Context<GuardedTransfer>, params: GuardedTransferParams) -> Result<()> {
+        let policy = &ctx.accounts.user_policy;
+        require!(policy.enabled, GuardError::PolicyDisabled);
+
+        let approval = &mut ctx.accounts.action_approval;
+        check_approval_active(approval)?;
+        require_keys_eq!(approval.user, ctx.accounts.user.key(), GuardError::ActionApprovalUserMismatch);
+        require!(approval.action_type == ActionType::TransferSol as u8 || approval.action_type == ActionType::TransferSolGuarded as u8, GuardError::InvalidActionType);
+        require_keys_eq!(approval.recipient, params.recipient, GuardError::ActionApprovalRecipientMismatch);
+        require!(approval.input_amount == params.amount_lamports, GuardError::ApprovalAmountMismatch);
+        require!(approval.action_hash == params.action_hash, GuardError::ActionApprovalActionHashMismatch);
+
+        let attestation = &ctx.accounts.wallet_safety_attestation;
+        require!(attestation.active, GuardError::WalletSafetyAttestationRevoked);
+        require!(attestation.expires_at > Clock::get()?.unix_timestamp, GuardError::WalletSafetyAttestationExpired);
+        require_keys_eq!(attestation.user, ctx.accounts.user.key(), GuardError::WalletSafetyAttestationUserMismatch);
+        require_keys_eq!(attestation.recipient, params.recipient, GuardError::WalletSafetyAttestationRecipientMismatch);
+        require!(attestation.action_hash == params.action_hash, GuardError::WalletSafetyAttestationActionHashMismatch);
+
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.recipient.to_account_info(),
+            },
+        );
+        anchor_lang::system_program::transfer(cpi_context, params.amount_lamports)?;
 
         approval.executed = true;
         Ok(())
@@ -218,6 +285,22 @@ pub struct CreateActionApprovalParams {
     pub expires_at: i64,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct UpsertWalletSafetyAttestationParams {
+    pub user: Pubkey,
+    pub action_hash: [u8; 32],
+    pub recipient: Pubkey,
+    pub expires_at: i64,
+    pub risk_score_bps: u16,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct GuardedTransferParams {
+    pub action_hash: [u8; 32],
+    pub amount_lamports: u64,
+    pub recipient: Pubkey,
+}
+
 #[account]
 pub struct UserPolicy {
     pub user: Pubkey,
@@ -248,12 +331,40 @@ pub struct ActionApproval {
     pub bump: u8,
 }
 
+#[account]
+pub struct WalletSafetyAttestation {
+    pub user: Pubkey,
+    pub recipient: Pubkey,
+    pub action_hash: [u8; 32],
+    pub attestor: Pubkey,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub risk_score_bps: u16,
+    pub active: bool,
+    pub bump: u8,
+}
+
+#[account]
+pub struct AttestorConfig {
+    pub admin: Pubkey,
+    pub attestor: Pubkey,
+    pub bump: u8,
+}
+
 impl UserPolicy {
     pub const LEN: usize = 32 + 8 + 8 + 2 + 1 + 1 + 1 + 1;
 }
 
 impl ActionApproval {
     pub const LEN: usize = 32 + 32 + 32 + 1 + 8 + 8 + 2 + 32 + 8 + 32 + 8 + 1 + 1 + 1;
+}
+
+impl WalletSafetyAttestation {
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 8 + 8 + 2 + 1 + 1;
+}
+
+impl AttestorConfig {
+    pub const LEN: usize = 32 + 32 + 1;
 }
 
 #[derive(Accounts)]
@@ -306,6 +417,62 @@ pub struct CreateActionApproval<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitializeAttestorConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + AttestorConfig::LEN,
+        seeds = [b"attestor_config"],
+        bump
+    )]
+    pub attestor_config: Account<'info, AttestorConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateAttestor<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"attestor_config"],
+        bump = attestor_config.bump,
+        constraint = attestor_config.admin == admin.key() @ GuardError::Unauthorized
+    )]
+    pub attestor_config: Account<'info, AttestorConfig>,
+}
+
+#[derive(Accounts)]
+#[instruction(params: UpsertWalletSafetyAttestationParams)]
+pub struct UpsertWalletSafetyAttestation<'info> {
+    #[account(mut)]
+    pub attestor: Signer<'info>,
+    #[account(
+        seeds = [b"user_policy", params.user.as_ref()],
+        bump = user_policy.bump,
+        constraint = user_policy.user == params.user @ GuardError::Unauthorized
+    )]
+    pub user_policy: Account<'info, UserPolicy>,
+    #[account(
+        init_if_needed,
+        payer = attestor,
+        space = 8 + WalletSafetyAttestation::LEN,
+        seeds = [b"wallet_safety_attestation", params.user.as_ref(), params.recipient.as_ref(), params.action_hash.as_ref()],
+        bump
+    )]
+    pub wallet_safety_attestation: Account<'info, WalletSafetyAttestation>,
+    #[account(
+        seeds = [b"attestor_config"],
+        bump = attestor_config.bump,
+        constraint = attestor_config.attestor == attestor.key() @ GuardError::Unauthorized
+    )]
+    pub attestor_config: Account<'info, AttestorConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct MutateApproval<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -323,6 +490,43 @@ pub struct MarkExecutedIfPriceBelow<'info> {
     pub oracle_price_feed: AccountInfo<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(params: GuardedTransferParams)]
+pub struct GuardedTransfer<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"user_policy", user.key().as_ref()],
+        bump = user_policy.bump,
+        constraint = user_policy.user == user.key() @ GuardError::Unauthorized
+    )]
+    pub user_policy: Account<'info, UserPolicy>,
+    #[account(
+        mut,
+        seeds = [b"action_approval", user.key().as_ref(), params.action_hash.as_ref()],
+        bump = action_approval.bump,
+        constraint = action_approval.action_hash == params.action_hash @ GuardError::ActionApprovalActionHashMismatch,
+        constraint = action_approval.user == user.key() @ GuardError::ActionApprovalUserMismatch,
+        constraint = action_approval.recipient == params.recipient @ GuardError::ActionApprovalRecipientMismatch,
+        constraint = action_approval.input_amount == params.amount_lamports @ GuardError::ApprovalAmountMismatch,
+        constraint = action_approval.action_type == ActionType::TransferSol as u8 || action_approval.action_type == ActionType::TransferSolGuarded as u8 @ GuardError::InvalidActionType
+    )]
+    pub action_approval: Account<'info, ActionApproval>,
+    #[account(
+        seeds = [b"wallet_safety_attestation", user.key().as_ref(), params.recipient.as_ref(), params.action_hash.as_ref()],
+        bump = wallet_safety_attestation.bump,
+        constraint = wallet_safety_attestation.action_hash == params.action_hash @ GuardError::WalletSafetyAttestationActionHashMismatch,
+        constraint = wallet_safety_attestation.user == user.key() @ GuardError::WalletSafetyAttestationUserMismatch,
+        constraint = wallet_safety_attestation.recipient == params.recipient @ GuardError::WalletSafetyAttestationRecipientMismatch
+    )]
+    pub wallet_safety_attestation: Account<'info, WalletSafetyAttestation>,
+    /// CHECK: recipient key is constrained against params.recipient and ActionApproval before CPI transfer.
+    #[account(mut)]
+    pub recipient: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[repr(u8)]
 pub enum ActionType {
     TransferSol = 0,
@@ -330,6 +534,7 @@ pub enum ActionType {
     BuySol = 2,
     PrivateTransfer = 3,
     BuySolOracleConditional = 4,
+    TransferSolGuarded = 5,
 }
 
 #[error_code]
@@ -364,4 +569,24 @@ pub enum GuardError {
     OracleConfidenceTooHigh,
     #[msg("Invalid oracle price")]
     InvalidOraclePrice,
+    #[msg("Action approval user mismatch")]
+    ActionApprovalUserMismatch,
+    #[msg("Action approval recipient mismatch")]
+    ActionApprovalRecipientMismatch,
+    #[msg("Action approval action hash mismatch")]
+    ActionApprovalActionHashMismatch,
+    #[msg("Action approval amount mismatch")]
+    ApprovalAmountMismatch,
+    #[msg("Wallet safety attestation user mismatch")]
+    WalletSafetyAttestationUserMismatch,
+    #[msg("Wallet safety attestation recipient mismatch")]
+    WalletSafetyAttestationRecipientMismatch,
+    #[msg("Wallet safety attestation action hash mismatch")]
+    WalletSafetyAttestationActionHashMismatch,
+    #[msg("Wallet safety attestation expired")]
+    WalletSafetyAttestationExpired,
+    #[msg("Wallet safety attestation revoked")]
+    WalletSafetyAttestationRevoked,
+    #[msg("Wallet safety attestation is expired")]
+    AttestationExpired,
 }

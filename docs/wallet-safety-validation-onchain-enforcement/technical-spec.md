@@ -35,6 +35,11 @@ Si luego el programa empieza a absorber custody compleja, múltiples assets o re
 
 ## Arquitectura Propuesta
 
+Referencia de dependencia:
+
+- El detalle program-only de `guarded_transfer`, `WalletSafetyAttestation`, modelo de attestors, Anchor tests e IDL asociado vive en `docs/agent-action-guard-guarded-transfer/`.
+- Este spec mantiene la propiedad del flujo end-to-end e integración runtime; no duplica la definición fina del programa.
+
 ### Componentes
 
 - Programa Solana: `BACK/solana/agent-action-guard/programs/agent-action-guard/src/lib.rs`
@@ -54,6 +59,12 @@ Si luego el programa empieza a absorber custody compleja, múltiples assets o re
 5. El usuario firma y envía.
 6. El programa valida cuentas y parámetros, hace la transferencia vía CPI y marca `ActionApproval.executed = true`.
 7. La verificación posterior del backend lee cuentas on-chain, no solo logs.
+
+Nota de alcance:
+
+- Solscan permanece como input `indexed/off-chain` del feature `wallet-safety-validation`.
+- El programa no consulta Solscan directamente.
+- Si la validación indexada de Solscan debe impactar enforcement on-chain, esa señal entra únicamente resumida en la `WalletSafetyAttestation`/PDA o mecanismo equivalente hash-bound.
 
 ## Diseño On-Chain
 
@@ -94,7 +105,7 @@ Propósito:
 
 #### `WalletSafetyAttestation`
 
-- `["wallet_attestation", user_pubkey, recipient_pubkey, action_hash]`
+- `["wallet_safety_attestation", user_pubkey, recipient_pubkey, action_hash]`
 
 Esta seed liga la attestation al usuario, destino y acción exacta. Evita reutilizar una validación vieja para otra transferencia.
 

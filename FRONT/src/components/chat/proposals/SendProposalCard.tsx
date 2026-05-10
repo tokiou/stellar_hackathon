@@ -1,4 +1,4 @@
-import { Send } from 'lucide-react';
+import { Clock3, Send, ShieldCheck } from 'lucide-react';
 import type { ConversationActionBlockReason, PendingProposal } from '@/types/chat';
 import type { TransferParams } from '@/types/api';
 import { truncateAddress } from '@/lib/format';
@@ -15,6 +15,7 @@ export function SendProposalCard({
   blockReason: ConversationActionBlockReason | null;
 }) {
   const params = proposal.function.params as TransferParams;
+  const onchainGuard = proposal.onchain_guardrail;
   const { approveProposal, rejectProposal } = useAgentMessage();
   const uiState = proposal.uiState;
   const isBusy =
@@ -48,6 +49,24 @@ export function SendProposalCard({
         {params.memo ? <Detail label="Memo" value={params.memo} /> : null}
         {proposal.display.fee_usd !== undefined ? <Detail label="Network fee" value={`$${proposal.display.fee_usd.toFixed(2)}`} /> : null}
       </div>
+      {onchainGuard ? (
+        <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs text-on-surface">
+          <div className="flex items-start gap-2">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <p className="font-semibold">Validación por contrato activa</p>
+              <p className="mt-1 leading-5 text-on-surface-variant">
+                Antes de mover los fondos, el contrato comprueba que esta transferencia mantenga el mismo destino,
+                el mismo monto y siga dentro del tiempo permitido. Si algo cambia, la transacción se bloquea.
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 flex items-center gap-1 text-on-surface-variant">
+            <Clock3 className="h-3.5 w-3.5" />
+            Esta aprobación vence el {new Date(onchainGuard.action_expires_at).toLocaleString()}.
+          </p>
+        </div>
+      ) : null}
       <RiskInlineAlert risk={proposal.risk} />
       <div className="mt-5 flex flex-col gap-3 sm:flex-row">
         <button

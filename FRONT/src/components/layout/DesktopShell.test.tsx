@@ -45,7 +45,7 @@ function makeHistoryState(overrides: Record<string, unknown> = {}) {
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     ...overrides,
-  };
+  } as unknown as ReturnType<typeof useTransactionHistory>;
 }
 
 function makeWalletState() {
