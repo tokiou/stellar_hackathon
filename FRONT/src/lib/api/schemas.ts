@@ -8,16 +8,53 @@ export const ApiErrorSchema = z.object({
   }),
 });
 
+const WalletSafetyReasonSchema = z.object({
+  code: z.string(),
+  severity: z.enum(['info', 'warning', 'critical']),
+  message: z.string(),
+  source: z.enum(['local', 'onchain', 'offchain', 'policy', 'onchain_approval']),
+});
+
+const WalletSafetyResultSchema = z.object({
+  decision: z.enum(['ALLOW', 'WARN', 'REJECT']),
+  riskLevel: z.enum(['low', 'medium', 'critical']),
+  hardReject: z.boolean(),
+  requiresExtraConfirmation: z.boolean(),
+  reasons: z.array(WalletSafetyReasonSchema),
+  sources: z
+    .array(
+      z.object({
+        provider: z.string(),
+        status: z.enum(['ok', 'missing', 'stale', 'error']),
+      }),
+    )
+    .optional(),
+});
+
 export const RiskInfoSchema = z.object({
   score: z.number().min(0).max(100),
   level: z.enum(['low', 'medium', 'critical']),
   reasons: z.array(z.string()).optional(),
+  requiresExtraConfirmation: z.boolean().optional(),
+  walletSafety: WalletSafetyResultSchema.optional(),
 });
 
 export const ExecuteSchema = z.object({
   status: z.enum(['submitted', 'confirmed', 'failed', 'success']),
   tx_hash: z.string().optional(),
   error: z.string().optional(),
+});
+
+const OnchainGuardrailSchema = z.object({
+  action_type: z.string(),
+  action_hash: z.string(),
+  policy_pda: z.string(),
+  action_approval_pda: z.string(),
+  wallet_safety_attestation_pda: z.string(),
+  action_expires_at: z.string(),
+  action_created_at: z.string(),
+  action_amount_lamports: z.number().int().nonnegative(),
+  action_recipient: z.string(),
 });
 
 export const SwapParamsSchema = z.object({
@@ -98,6 +135,7 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
     }),
     risk: RiskInfoSchema,
     execution: FunctionExecutionSchema.optional(),
+    onchain_guardrail: OnchainGuardrailSchema.optional(),
     timestamp: z.string(),
   }),
   z.object({
@@ -116,6 +154,7 @@ export const TransactionPayloadSchema = z.object({
   last_valid_block_height: z.number().optional(),
   network: z.string().optional(),
   execution_type: z.string().optional(),
+  onchain_guardrail: OnchainGuardrailSchema.optional(),
 });
 
 export const AgentMessageResponseSchema = z.object({
@@ -305,5 +344,6 @@ export const SSEProposalSchema = z.object({
       expected_user_address: z.string().optional(),
     })
     .optional(),
+  onchain_guardrail: OnchainGuardrailSchema.optional(),
   timestamp: z.string(),
 });

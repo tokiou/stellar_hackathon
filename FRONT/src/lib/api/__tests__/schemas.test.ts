@@ -275,6 +275,53 @@ describe('api schemas', () => {
     expect(parsedProposal.execution?.mode).toBe('phantom_sign_and_send');
   });
 
+  it('preserves on-chain guardrail metadata in SSE proposals', () => {
+    const parsedProposal = SSEProposalSchema.parse({
+      type: 'function_call',
+      function: {
+        name: 'transfer',
+        params: {
+          amount: 5,
+          token: 'SOL',
+          recipient: 'bEsfmEAaTA98rLftyi2jZ4XAzCBbqBvrJPKNW6rYJgp',
+        },
+      },
+      display: {
+        summary: 'Enviar 5 SOL a bEsf...YJgp',
+        fee_usd: 0.01,
+        provider: 'solana_devnet_guarded_transfer',
+      },
+      risk: {
+        score: 55,
+        level: 'medium',
+      },
+      execution: {
+        mode: 'phantom_sign_and_send',
+        network: 'devnet',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      onchain_guardrail: {
+        action_type: 'sol_transfer',
+        action_hash: '8m1Y9vV1t42H8JVE3qA6RkN6sQSmDMbtKuQVppAxX4oa',
+        policy_pda: '5xpP9TksL4dJ8Y6vvLMUbJECJbnmMmk2nvtbHhfk1ygn',
+        action_approval_pda: 'J4nZD8Gj3oCt6Q2UoZc77YvbdMzYBdX5pZGbzLM6KFAH',
+        wallet_safety_attestation_pda: 'E7Lr8EemNr7uCMtGY9rMUneG5UegHH8zGwSVXHSKzpn5',
+        action_expires_at: new Date(Date.now() + 60_000).toISOString(),
+        action_created_at: new Date().toISOString(),
+        action_amount_lamports: 5_000_000_000,
+        action_recipient: 'bEsfmEAaTA98rLftyi2jZ4XAzCBbqBvrJPKNW6rYJgp',
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(parsedProposal.onchain_guardrail?.policy_pda).toBe(
+      '5xpP9TksL4dJ8Y6vvLMUbJECJbnmMmk2nvtbHhfk1ygn',
+    );
+    expect(parsedProposal.onchain_guardrail?.action_approval_pda).toBe(
+      'J4nZD8Gj3oCt6Q2UoZc77YvbdMzYBdX5pZGbzLM6KFAH',
+    );
+  });
+
   it('validates conditional order list and detail schemas', () => {
     const now = Math.floor(Date.now() / 1000);
 

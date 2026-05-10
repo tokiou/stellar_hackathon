@@ -22,7 +22,7 @@ const inMemoryStorageAdapter = {
 function reset() {
   inMemoryStorageAdapter.clear();
   useChatStore.persist.setOptions({
-    storage: inMemoryStorageAdapter,
+    storage: inMemoryStorageAdapter as never,
   });
   useChatStore.getState().clearHistory();
   useChatStore.persist.clearStorage();
@@ -101,7 +101,7 @@ describe('chatStore conversation persistence', () => {
 
     expect(useChatStore.getState().activeConversationId).toBe(firstConversationId);
     const activeConversation = useChatStore.getState().getActiveConversation();
-    expect(activeConversation?.messages.map((message) => message.content)).toContain('Primera pregunta');
+    expect(activeConversation?.messages.map((message) => ('content' in message ? message.content : ''))).toContain('Primera pregunta');
   });
 
   it('marks stale session as read-only', () => {

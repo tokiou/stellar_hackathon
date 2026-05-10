@@ -22,8 +22,20 @@ import {
   prepareTransferResult,
   generateTransferDisplay,
   assessTransferRisk,
+  normalizeTransferToken,
   type TransferParams,
 } from './tools/transfer';
+import {
+  buildTransferActionHash,
+  buildTransferCanonicalParams,
+  buildTransferMetadata,
+  deriveWalletPolicyPda,
+  evaluateWalletSafety,
+  hasActionHashMismatch,
+  isPendingActionExpired,
+  type WalletSafetyDecisionResult,
+  type WalletSafetyEvaluation,
+} from './walletSafetyValidation';
 import {
   evaluateConditionalBuy,
   type ConditionalBuySolParams,
@@ -34,6 +46,12 @@ import {
 import { DEVNET_USDC_MINT, quoteOrcaUsdcToSol, type OrcaSwapParams } from './tools/orcaSwap';
 import { buildUnsignedOrcaSwapTx } from './tools/orcaSwapTx';
 import {
+  deriveActionApprovalAddress,
+  deriveWalletSafetyAttestationAddress,
+  fetchWalletSafetyAttestationAccount,
+  verifyTransferGuardReadiness,
+} from './onchainApproval';
+import {
   callAzureResponsesStream,
   callAzureResponses,
   parseResponsesStream,
@@ -42,6 +60,8 @@ import {
 import { web3 } from '@coral-xyz/anchor';
 import { fetchWalletHoldings } from './walletHoldings';
 import { getUsdcSolQuote } from './priceQuote';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 // ============================================================================
 // Types - Unified Contract
@@ -58,6 +78,7 @@ type ChatRequest =
   | {
       type: 'function_approve';
       session_id: string;
+      action_hash?: string;
     }
   | {
       type: 'function_result';
@@ -104,6 +125,19 @@ type AgentFunctionCallMessage = {
     score: number;
     level: 'low' | 'medium' | 'critical';
     reasons?: string[];
+    requiresExtraConfirmation?: boolean;
+    walletSafety?: WalletSafetyDecisionResult;
+  };
+  onchain_guardrail?: {
+    action_type: string;
+    action_hash: string;
+    policy_pda: string;
+    action_approval_pda: string;
+    wallet_safety_attestation_pda: string;
+    action_expires_at: string;
+    action_created_at: string;
+    action_amount_lamports: number;
+    action_recipient: string;
   };
   timestamp: string;
 };
@@ -125,9 +159,9 @@ const TRANSFER_TOOL: ResponsesToolDefinition = {
   type: 'function',
   name: 'transfer',
   description:
-    'Prepara una transferencia de SOL o tokens a otra wallet de Solana. ' +
+    'Prepara una transferencia de SOL a otra wallet de Solana. ' +
     'NO ejecuta la transferencia on-chain. Retorna una acción preparada que requiere aprobación del usuario. ' +
-    'Usa esta herramienta cuando el usuario quiera enviar/transferir SOL o tokens a otra dirección.',
+    'Usa esta herramienta cuando el usuario quiera enviar/transferir SOL a otra dirección.',
   parameters: {
     type: 'object',
     properties: {
@@ -137,7 +171,7 @@ const TRANSFER_TOOL: ResponsesToolDefinition = {
       },
       token: {
         type: 'string',
-        description: 'Símbolo del token (default: SOL)',
+        description: 'Símbolo del token. En esta demo solo se soporta SOL.',
       },
       recipient: {
         type: 'string',
@@ -278,6 +312,9 @@ const MIN_USDC_FUNDING_SWAP_SOL = 0.05;
 const DEV_USDC_FUNDING_SOL_PER_USDC = 0.06;
 const TOKEN_PROGRAM_ID = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const USER_POLICY_ACCOUNT_SPACE = 8 + 32 + 8 + 8 + 2 + 1 + 1 + 1 + 1;
+const ACTION_APPROVAL_ACCOUNT_SPACE = 8 + 32 + 32 + 32 + 1 + 8 + 8 + 2 + 32 + 8 + 32 + 8 + 1 + 1 + 1;
+const SOL_TRANSFER_FEE_BUFFER_LAMPORTS = 50_000;
 
 // ============================================================================
 // Helpers
@@ -425,43 +462,438 @@ function normalizeChatError(err: unknown): { code: string; message: string } {
   };
 }
 
+type MaskedSolanaAddresses = {
+  content: string;
+  addressByPlaceholder: Record<string, string>;
+};
+
+type DirectTransferIntent =
+  | {
+      matched: true;
+      amount: number;
+      token: string;
+      recipient: string;
+      recipientValid: boolean;
+    }
+  | { matched: false };
+
+function isValidSolanaPubkey(value: string): boolean {
+  try {
+    new web3.PublicKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function maskSolanaAddressesForModel(content: string): MaskedSolanaAddresses {
+  const addressByPlaceholder: Record<string, string> = {};
+  let index = 0;
+  const contentWithMasks = content.replace(/[1-9A-HJ-NP-Za-km-z]{32,44}/g, (candidate) => {
+    const existing = Object.entries(addressByPlaceholder).find(([, address]) => address === candidate)?.[0];
+    if (existing) return existing;
+    index += 1;
+    const placeholder = `SOLANA_ADDRESS_${index}`;
+    addressByPlaceholder[placeholder] = candidate;
+    return placeholder;
+  });
+
+  return { content: contentWithMasks, addressByPlaceholder };
+}
+
+export function parseDirectTransferIntent(content: string): DirectTransferIntent {
+  const normalized = content.trim();
+  if (!/\b(manda|mand[aá]|envi[aá]|envia|transfer[ií]|transferir|send)\b/i.test(normalized)) {
+    return { matched: false };
+  }
+
+  const amountMatch = normalized.match(/\b(\d+(?:[.,]\d+)?)\s*([A-Za-z]{2,10})\b/i);
+  const recipientMatch = normalized.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
+  if (!amountMatch || !recipientMatch) {
+    return { matched: false };
+  }
+
+  const amount = Number(amountMatch[1].replace(',', '.'));
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { matched: false };
+  }
+
+  const recipient = recipientMatch[0];
+  return {
+    matched: true,
+    amount,
+    token: normalizeTransferToken(amountMatch[2]).toUpperCase(),
+    recipient,
+    recipientValid: isValidSolanaPubkey(recipient),
+  };
+}
+
+export function restoreMaskedSolanaAddressesInToolArgs(
+  rawArguments: string | undefined,
+  addressByPlaceholder: Record<string, string>
+): string | undefined {
+  if (!rawArguments || Object.keys(addressByPlaceholder).length === 0) return rawArguments;
+
+  let restored = rawArguments;
+  for (const [placeholder, address] of Object.entries(addressByPlaceholder)) {
+    restored = restored.replaceAll(placeholder, address);
+  }
+  return restored;
+}
+
 function getSolanaConnection() {
   const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
   return new web3.Connection(rpcUrl, 'confirmed');
+}
+
+type SolTransferFundingCheck = {
+  ok: boolean;
+  balanceLamports: number;
+  requiredLamports: number;
+  missingLamports: number;
+  amountLamports: number;
+  overheadLamports: number;
+  policyAccountMissing: boolean;
+};
+
+export function evaluateSolTransferFunding(params: {
+  balanceLamports: number;
+  amountLamports: number;
+  policyRentLamports: number;
+  approvalRentLamports: number;
+  feeBufferLamports?: number;
+  policyAccountMissing: boolean;
+}): SolTransferFundingCheck {
+  const overheadLamports =
+    params.approvalRentLamports +
+    (params.policyAccountMissing ? params.policyRentLamports : 0) +
+    (params.feeBufferLamports ?? SOL_TRANSFER_FEE_BUFFER_LAMPORTS);
+  const requiredLamports = params.amountLamports + overheadLamports;
+  const missingLamports = Math.max(0, requiredLamports - params.balanceLamports);
+
+  return {
+    ok: missingLamports === 0,
+    balanceLamports: params.balanceLamports,
+    requiredLamports,
+    missingLamports,
+    amountLamports: params.amountLamports,
+    overheadLamports,
+    policyAccountMissing: params.policyAccountMissing,
+  };
+}
+
+function formatLamportsAsSol(lamports: number): string {
+  const sol = lamports / web3.LAMPORTS_PER_SOL;
+  return sol.toLocaleString('es-AR', {
+    minimumFractionDigits: sol < 1 ? 4 : 2,
+    maximumFractionDigits: 6,
+  });
+}
+
+async function checkSolTransferFunding(params: {
+  userWallet: string;
+  amountSol: number;
+  policyPda: string;
+}): Promise<SolTransferFundingCheck> {
+  const connection = getSolanaConnection();
+  const user = new web3.PublicKey(params.userWallet);
+  const policy = new web3.PublicKey(params.policyPda);
+  const amountLamports = Math.round(params.amountSol * web3.LAMPORTS_PER_SOL);
+
+  const [balanceLamports, policyInfo, policyRentLamports, approvalRentLamports] = await Promise.all([
+    connection.getBalance(user, 'confirmed'),
+    connection.getAccountInfo(policy, 'confirmed'),
+    connection.getMinimumBalanceForRentExemption(USER_POLICY_ACCOUNT_SPACE),
+    connection.getMinimumBalanceForRentExemption(ACTION_APPROVAL_ACCOUNT_SPACE),
+  ]);
+
+  return evaluateSolTransferFunding({
+    balanceLamports,
+    amountLamports,
+    policyRentLamports,
+    approvalRentLamports,
+    policyAccountMissing: !policyInfo,
+  });
 }
 
 async function buildUnsignedSolTransferTx(params: {
   fromWallet: string;
   toWallet: string;
   amountSol: number;
-  recentBlockhash?: string;
-  lastValidBlockHeight?: number;
+  actionMetadata: {
+    actionHash: string;
+    policyPda: string;
+    actionExpiresAt: string;
+    includeCreateActionApproval?: boolean;
+    includeWalletSafetyAttestation?: boolean;
+    riskScoreBps?: number;
+  };
 }): Promise<{ txBase64: string; blockhash: string; lastValidBlockHeight: number }> {
   const connection = getSolanaConnection();
   const from = new web3.PublicKey(params.fromWallet);
   const to = new web3.PublicKey(params.toWallet);
   const lamports = Math.round(params.amountSol * web3.LAMPORTS_PER_SOL);
 
-  const ix = web3.SystemProgram.transfer({
-    fromPubkey: from,
-    toPubkey: to,
-    lamports,
-  });
+  const programId = process.env.AGENT_ACTION_GUARD_PROGRAM_ID;
+  if (!programId) {
+    throw new Error('AGENT_ACTION_GUARD_PROGRAM_ID_NOT_CONFIGURED');
+  }
 
-  const { blockhash, lastValidBlockHeight } = params.recentBlockhash
-    ? { blockhash: params.recentBlockhash, lastValidBlockHeight: params.lastValidBlockHeight ?? 0 }
-    : await connection.getLatestBlockhash('confirmed');
+  const actionApprovalPda = deriveActionApprovalAddress({
+    user: params.fromWallet,
+    actionHash: params.actionMetadata.actionHash,
+    programId,
+  });
+  const attestationPda = deriveWalletSafetyAttestationAddress({
+    user: params.fromWallet,
+    recipient: params.toWallet,
+    actionHash: params.actionMetadata.actionHash,
+    programId,
+  });
+  const policyPda = params.actionMetadata.policyPda;
+  const actionHashBytes = Buffer.from(params.actionMetadata.actionHash, 'hex');
+  const expiresAtUnix = Math.floor(new Date(params.actionMetadata.actionExpiresAt).getTime() / 1000);
+
+  const actionDiscriminator = createHash('sha256')
+    .update('global:guarded_transfer')
+    .digest()
+    .subarray(0, 8);
+  const amountBuffer = Buffer.alloc(8);
+  amountBuffer.writeBigUInt64LE(BigInt(lamports));
+
+  const data = Buffer.concat([
+    Buffer.from(actionDiscriminator),
+    actionHashBytes,
+    amountBuffer,
+    to.toBuffer(),
+  ]);
+
+  const instructions: web3.TransactionInstruction[] = [];
+
+  if (params.actionMetadata.includeCreateActionApproval) {
+    const policyInfo = await connection.getAccountInfo(new web3.PublicKey(policyPda));
+    if (!policyInfo) {
+      const initializePolicyDiscriminator = createHash('sha256')
+        .update('global:initialize_policy')
+        .digest()
+        .subarray(0, 8);
+      const initializePolicyData = Buffer.alloc(8 + 8 + 8 + 2 + 1 + 1 + 1);
+      let policyOffset = 0;
+      Buffer.from(initializePolicyDiscriminator).copy(initializePolicyData, policyOffset); policyOffset += 8;
+      initializePolicyData.writeBigUInt64LE(BigInt(Math.max(lamports, 100 * web3.LAMPORTS_PER_SOL)), policyOffset); policyOffset += 8;
+      initializePolicyData.writeBigUInt64LE(BigInt(100_000_000_000), policyOffset); policyOffset += 8;
+      initializePolicyData.writeUInt16LE(500, policyOffset); policyOffset += 2;
+      initializePolicyData.writeUInt8(0, policyOffset); policyOffset += 1;
+      initializePolicyData.writeUInt8(1, policyOffset); policyOffset += 1;
+      initializePolicyData.writeUInt8(1, policyOffset);
+
+      instructions.push(new web3.TransactionInstruction({
+        programId: new web3.PublicKey(programId),
+        keys: [
+          { pubkey: from, isSigner: true, isWritable: true },
+          { pubkey: new web3.PublicKey(policyPda), isSigner: false, isWritable: true },
+          { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: initializePolicyData,
+      }));
+    }
+  }
+
+  let attestor: web3.Keypair | null = null;
+  if (params.actionMetadata.includeWalletSafetyAttestation) {
+    attestor = parseAttestorKeypair();
+    if (!attestor) {
+      throw new Error('WALLET_SAFETY_ATTESTOR_SECRET_KEY_NOT_CONFIGURED');
+    }
+
+    const attestationDiscriminator = createHash('sha256')
+      .update('global:upsert_wallet_safety_attestation')
+      .digest()
+      .subarray(0, 8);
+    const attestationData = Buffer.alloc(8 + 32 + 32 + 32 + 8 + 2);
+    let attestationOffset = 0;
+    Buffer.from(attestationDiscriminator).copy(attestationData, attestationOffset); attestationOffset += 8;
+    from.toBuffer().copy(attestationData, attestationOffset); attestationOffset += 32;
+    actionHashBytes.copy(attestationData, attestationOffset); attestationOffset += 32;
+    to.toBuffer().copy(attestationData, attestationOffset); attestationOffset += 32;
+    attestationData.writeBigInt64LE(BigInt(expiresAtUnix), attestationOffset); attestationOffset += 8;
+    attestationData.writeUInt16LE(
+      Math.max(0, Math.min(10_000, Math.round(params.actionMetadata.riskScoreBps ?? 1_500))),
+      attestationOffset,
+    );
+
+    instructions.push(new web3.TransactionInstruction({
+      programId: new web3.PublicKey(programId),
+      keys: [
+        { pubkey: attestor.publicKey, isSigner: true, isWritable: true },
+        { pubkey: new web3.PublicKey(policyPda), isSigner: false, isWritable: false },
+        { pubkey: new web3.PublicKey(attestationPda.address), isSigner: false, isWritable: true },
+        { pubkey: getAttestorConfigPda(programId), isSigner: false, isWritable: false },
+        { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: attestationData,
+    }));
+  }
+
+  if (params.actionMetadata.includeCreateActionApproval) {
+    const createDiscriminator = createHash('sha256')
+      .update('global:create_action_approval')
+      .digest()
+      .subarray(0, 8);
+    const createData = Buffer.alloc(8 + 32 + 32 + 1 + 8 + 8 + 2 + 32 + 8 + 32 + 8);
+    let offset = 0;
+    Buffer.from(createDiscriminator).copy(createData, offset); offset += 8;
+    new web3.PublicKey(programId).toBuffer().copy(createData, offset); offset += 32;
+    actionHashBytes.copy(createData, offset); offset += 32;
+    createData.writeUInt8(5, offset); offset += 1;
+    createData.writeBigUInt64LE(BigInt(lamports), offset); offset += 8;
+    createData.writeBigUInt64LE(BigInt(0), offset); offset += 8;
+    createData.writeUInt16LE(0, offset); offset += 2;
+    to.toBuffer().copy(createData, offset); offset += 32;
+    createData.writeBigUInt64LE(BigInt(0), offset); offset += 8;
+    web3.SystemProgram.programId.toBuffer().copy(createData, offset); offset += 32;
+    createData.writeBigInt64LE(BigInt(expiresAtUnix), offset);
+
+    instructions.push(new web3.TransactionInstruction({
+      programId: new web3.PublicKey(programId),
+      keys: [
+        { pubkey: from, isSigner: true, isWritable: true },
+        { pubkey: new web3.PublicKey(policyPda), isSigner: false, isWritable: false },
+        { pubkey: new web3.PublicKey(actionApprovalPda.address), isSigner: false, isWritable: true },
+        { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: createData,
+    }));
+  }
+
+  instructions.push(new web3.TransactionInstruction({
+    programId: new web3.PublicKey(programId),
+    keys: [
+      { pubkey: from, isSigner: true, isWritable: true },
+      { pubkey: new web3.PublicKey(policyPda), isSigner: false, isWritable: true },
+      { pubkey: new web3.PublicKey(actionApprovalPda.address), isSigner: false, isWritable: true },
+      { pubkey: new web3.PublicKey(attestationPda.address), isSigner: false, isWritable: false },
+      { pubkey: to, isSigner: false, isWritable: true },
+      { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  }));
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
   const msg = new web3.TransactionMessage({
     payerKey: from,
     recentBlockhash: blockhash,
-    instructions: [ix],
+    instructions,
   }).compileToV0Message();
 
   const tx = new web3.VersionedTransaction(msg);
+  if (attestor) {
+    tx.sign([attestor]);
+  }
   const txBase64 = Buffer.from(tx.serialize()).toString('base64');
 
   return { txBase64, blockhash, lastValidBlockHeight };
+}
+
+function parseAttestorKeypair(): web3.Keypair | null {
+  const raw = process.env.WALLET_SAFETY_ATTESTOR_SECRET_KEY
+    || (process.env.WALLET_SAFETY_ATTESTOR_SECRET_KEY_FILE
+      ? readFileSync(process.env.WALLET_SAFETY_ATTESTOR_SECRET_KEY_FILE, 'utf8')
+      : '');
+  if (!raw) return null;
+
+  try {
+    if (raw.trim().startsWith('[')) {
+      return web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+    }
+    return web3.Keypair.fromSecretKey(Buffer.from(raw, 'base64'));
+  } catch {
+    return null;
+  }
+}
+
+function getAttestorConfigPda(programId: string): web3.PublicKey {
+  return web3.PublicKey.findProgramAddressSync(
+    [Buffer.from('attestor_config')],
+    new web3.PublicKey(programId),
+  )[0];
+}
+
+async function ensureWalletSafetyAttestation(params: {
+  user: string;
+  recipient: string;
+  actionHash: string;
+  actionExpiresAt: string;
+  riskScoreBps: number;
+}): Promise<{ ok: boolean; reason?: string }> {
+  const programId = process.env.AGENT_ACTION_GUARD_PROGRAM_ID;
+  if (!programId) return { ok: false, reason: 'AGENT_ACTION_GUARD_PROGRAM_ID_NOT_CONFIGURED' };
+
+  const attestor = parseAttestorKeypair();
+  if (!attestor) {
+    return { ok: true, reason: 'WALLET_SAFETY_ATTESTOR_SECRET_KEY_NOT_CONFIGURED' };
+  }
+
+  const existing = await fetchWalletSafetyAttestationAccount({
+    user: params.user,
+    recipient: params.recipient,
+    actionHash: params.actionHash,
+    programId,
+  });
+  const expiresAtUnix = Math.floor(new Date(params.actionExpiresAt).getTime() / 1000);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (
+    existing?.active &&
+    existing.action_hash === params.actionHash &&
+    existing.user === params.user &&
+    existing.recipient === params.recipient &&
+    existing.expires_at > nowUnix
+  ) {
+    return { ok: true };
+  }
+
+  const connection = getSolanaConnection();
+  const attestationPda = deriveWalletSafetyAttestationAddress({
+    user: params.user,
+    recipient: params.recipient,
+    actionHash: params.actionHash,
+    programId,
+  });
+  const discriminator = createHash('sha256')
+    .update('global:upsert_wallet_safety_attestation')
+    .digest()
+    .subarray(0, 8);
+  const data = Buffer.alloc(8 + 32 + 32 + 32 + 8 + 2);
+  let offset = 0;
+  Buffer.from(discriminator).copy(data, offset); offset += 8;
+  new web3.PublicKey(params.user).toBuffer().copy(data, offset); offset += 32;
+  Buffer.from(params.actionHash, 'hex').copy(data, offset); offset += 32;
+  new web3.PublicKey(params.recipient).toBuffer().copy(data, offset); offset += 32;
+  data.writeBigInt64LE(BigInt(expiresAtUnix), offset); offset += 8;
+  data.writeUInt16LE(Math.max(0, Math.min(10_000, Math.round(params.riskScoreBps))), offset);
+
+  const ix = new web3.TransactionInstruction({
+    programId: new web3.PublicKey(programId),
+    keys: [
+      { pubkey: attestor.publicKey, isSigner: true, isWritable: true },
+      { pubkey: new web3.PublicKey(deriveWalletPolicyPda({ userWallet: params.user })), isSigner: false, isWritable: false },
+      { pubkey: new web3.PublicKey(attestationPda.address), isSigner: false, isWritable: true },
+      { pubkey: getAttestorConfigPda(programId), isSigner: false, isWritable: false },
+      { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+
+  const tx = new web3.Transaction().add(ix);
+  tx.feePayer = attestor.publicKey;
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.sign(attestor);
+  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+  return { ok: true };
 }
 
 // ============================================================================
@@ -537,14 +969,47 @@ async function handleUserMessage(request: {
       const systemInstruction =
         'Eres un asistente de wallet para Solana llamado Compass. ' +
         'Ayudas a los usuarios a realizar transferencias y compras condicionales de SOL de forma segura. ' +
-        'Cuando el usuario pida transferir SOL o tokens, usa la herramienta transfer. ' +
+        'Cuando el usuario pida transferir SOL, usa la herramienta transfer. ' +
+        'En esta demo no prepares transferencias de otros tokens con la herramienta transfer. ' +
         'Cuando el usuario pida comprar SOL solo si el precio está por debajo de X, usa la herramienta conditional_buy_sol. ' +
         'Cuando el usuario pida conocer el saldo real de su wallet, usa get_wallet_holdings. ' +
         'Cuando el usuario pida una cotizacion de conversion USDC/SOL, usa get_usdc_sol_quote. ' +
         'IMPORTANTE: NUNCA digas que ejecutaste una transferencia on-chain. Solo puedes preparar la acción y pedir aprobación del usuario. ' +
         'Responde en español de forma concisa y amigable.';
 
-      const conversationInput = `[Usuario]: ${request.content}`;
+      const maskedUserInput = maskSolanaAddressesForModel(request.content);
+      const conversationInput = `[Usuario]: ${maskedUserInput.content}`;
+      const directTransferIntent = parseDirectTransferIntent(request.content);
+      if (directTransferIntent.matched) {
+        if (!directTransferIntent.recipientValid) {
+          await writeSSE(writer, encoder, 'error', {
+            code: 'invalid_recipient',
+            message:
+              'La dirección de destino no parece ser una dirección válida de Solana. Revisá que esté completa y volvé a intentarlo.',
+          });
+          await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+          return;
+        }
+
+        await handleTransferToolCall(
+          {
+            name: 'transfer',
+            arguments: JSON.stringify({
+              amount: directTransferIntent.amount,
+              token: directTransferIntent.token,
+              recipient: directTransferIntent.recipient,
+            }),
+          },
+          sessionId,
+          session.userAddress,
+          session,
+          writer,
+          encoder,
+          conversationInput,
+          systemInstruction
+        );
+        return;
+      }
 
       // First call: check if model wants to use tools
       const initialResponse = await callAzureResponses({
@@ -568,7 +1033,13 @@ async function handleUserMessage(request: {
         if (toolCall && toolCall.name) {
         if (toolCall.name === 'transfer') {
           await handleTransferToolCall(
-            { name: toolCall.name, arguments: toolCall.arguments },
+            {
+              name: toolCall.name,
+              arguments: restoreMaskedSolanaAddressesInToolArgs(
+                toolCall.arguments,
+                maskedUserInput.addressByPlaceholder,
+              ),
+            },
             sessionId,
             session.userAddress,
             session,
@@ -579,7 +1050,13 @@ async function handleUserMessage(request: {
           );
         } else if (toolCall.name === 'conditional_buy_sol') {
           await handleConditionalBuyToolCall(
-            { name: toolCall.name, arguments: toolCall.arguments },
+            {
+              name: toolCall.name,
+              arguments: restoreMaskedSolanaAddressesInToolArgs(
+                toolCall.arguments,
+                maskedUserInput.addressByPlaceholder,
+              ),
+            },
             sessionId,
             session,
             writer,
@@ -587,7 +1064,13 @@ async function handleUserMessage(request: {
           );
         } else if (toolCall.name === 'get_wallet_holdings') {
           await handleGetWalletHoldingsToolCall(
-            { name: toolCall.name, arguments: toolCall.arguments },
+            {
+              name: toolCall.name,
+              arguments: restoreMaskedSolanaAddressesInToolArgs(
+                toolCall.arguments,
+                maskedUserInput.addressByPlaceholder,
+              ),
+            },
             sessionId,
             session.userAddress,
             writer,
@@ -603,7 +1086,13 @@ async function handleUserMessage(request: {
           );
         } else {
           await handleOrcaSwapToolCall(
-            { name: toolCall.name, arguments: toolCall.arguments },
+            {
+              name: toolCall.name,
+              arguments: restoreMaskedSolanaAddressesInToolArgs(
+                toolCall.arguments,
+                maskedUserInput.addressByPlaceholder,
+              ),
+            },
             sessionId,
             session,
             writer,
@@ -1151,53 +1640,17 @@ async function handleTransferToolCall(
   // Execute tool
   const toolResult = prepareTransferResult(toolArgs, userAddress);
 
-  if (toolResult.status === 'prepared') {
-    // Generate display and risk info
-    const display = generateTransferDisplay(toolArgs);
-    const risk = assessTransferRisk(toolArgs);
+  if (toolResult.status !== 'prepared') {
+    if (toolResult.reason === 'UNSUPPORTED_TOKEN') {
+      await writeSSE(writer, encoder, 'error', {
+        code: 'unsupported_token',
+        message: `Por ahora esta demo solo prepara transferencias de SOL. Revisá el token e intentá de nuevo.`,
+      });
+      await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+      await writer.close();
+      return;
+    }
 
-    // Store pending proposal for HITL
-    updateSession(sessionId, {
-      pendingProposal: {
-        proposalType: 'transfer',
-        state: 'awaiting_approval',
-        toolName: 'transfer',
-        toolArgs,
-        toolResult,
-        createdAt: Date.now(),
-        expiresAt: getProposalExpiry(),
-        expectedUserAddress: userAddress,
-        network: DEFAULT_SOLANA_NETWORK,
-      },
-    });
-
-    console.log(`[chat] Proposal created: ${sessionId} - transfer ${toolArgs.amount} ${toolArgs.token}`);
-
-    // Build proposal message
-    const proposal: AgentFunctionCallMessage = {
-    type: 'function_call',
-    function: {
-        name: 'transfer',
-        params: toolArgs,
-      },
-      display,
-      risk,
-      execution: {
-        mode: 'phantom_sign_and_send',
-        network: DEFAULT_SOLANA_NETWORK,
-        expires_at: new Date(getProposalExpiry()).toISOString(),
-        expected_user_address: userAddress ?? undefined,
-      },
-      timestamp: now(),
-    };
-
-    // Send proposal event
-    await writeSSE(writer, encoder, 'proposal', proposal);
-    await writeSSE(writer, encoder, 'done', { session_id: sessionId, awaiting_approval: true });
-    await writer.close();
-    return;
-  } else {
-    // Tool denied the action, stream explanation
     const denialInput =
       conversationInput +
       `\n\n[Resultado de herramienta transfer]: La transferencia fue rechazada. Razón: ${toolResult.reason}`;
@@ -1213,6 +1666,204 @@ async function handleTransferToolCall(
     await writer.close();
     return;
   }
+
+  let policyPda = '';
+  try {
+    policyPda = deriveWalletPolicyPda({ userWallet: userAddress });
+  } catch (error) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'onchain_guard_config_missing',
+      message: error instanceof Error ? error.message : 'No se pudo configurar el guardrail on-chain.',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  if (normalizeTransferToken(toolArgs.token).toUpperCase() === 'SOL') {
+    let funding: SolTransferFundingCheck;
+    try {
+      funding = await checkSolTransferFunding({
+        userWallet: userAddress,
+        amountSol: toolArgs.amount,
+        policyPda,
+      });
+    } catch (error) {
+      console.warn('[chat] Balance precheck failed:', error);
+      await writeSSE(writer, encoder, 'error', {
+        code: 'balance_check_failed',
+        message: 'No pude verificar el saldo de tu wallet en devnet. Reintentá en unos segundos antes de preparar la transferencia.',
+      });
+      await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+      await writer.close();
+      return;
+    }
+
+    if (!funding.ok) {
+      await writeSSE(writer, encoder, 'error', {
+        code: 'insufficient_funds',
+        message:
+          `Tu wallet tiene ${formatLamportsAsSol(funding.balanceLamports)} SOL, pero esta operación necesita aproximadamente ` +
+          `${formatLamportsAsSol(funding.requiredLamports)} SOL (${formatLamportsAsSol(funding.amountLamports)} SOL a enviar ` +
+          '+ fees y validación por contrato). Bajá el monto o fondeá la wallet antes de continuar.',
+      });
+      await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+      await writer.close();
+      return;
+    }
+  }
+
+  const safety: WalletSafetyEvaluation = await evaluateWalletSafety({
+    userWallet: userAddress,
+    recipient: toolArgs.recipient,
+    amount: toolArgs.amount,
+    token: toolArgs.token,
+    memo: toolArgs.memo,
+  });
+
+  if (safety.decisionResult.decision === 'REJECT') {
+    const riskReasons = safety.decisionResult.reasons.map((reason) => `${reason.code}: ${reason.message}`);
+    const rejectionMessage =
+      `La transferencia fue bloqueada por reglas de seguridad: ${riskReasons.join(' | ')}` +
+      '\n\nSi quieres, corrige los datos e intenta nuevamente.';
+    const denialStream = await callAzureResponsesStream({
+      input: conversationInput + `\n\n[Resultado de guardrail]: ${rejectionMessage}`,
+      instructions: systemInstruction,
+      maxOutputTokens: 1024,
+    });
+
+    await streamResponseToSSE(denialStream, writer, encoder);
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  const canonical = buildTransferCanonicalParams({
+    userWallet: userAddress,
+    recipient: safety.canonical.recipient,
+    amount: safety.canonical.amount,
+    token: safety.canonical.token,
+    memo: safety.canonical.memo,
+  });
+  const proposalCreatedAt = Date.now();
+  let actionMetadata: ReturnType<typeof buildTransferMetadata>;
+  try {
+    actionMetadata = buildTransferMetadata(canonical, proposalCreatedAt, { policyPda });
+  } catch (error) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'onchain_guard_config_missing',
+      message: error instanceof Error ? error.message : 'No se pudo configurar el guardrail on-chain.',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  const actionHash = actionMetadata.actionHash;
+  const actionApprovalPda = deriveActionApprovalAddress({ user: userAddress, actionHash }).address;
+  const walletSafetyAttestationPda = deriveWalletSafetyAttestationAddress({
+    user: userAddress,
+    recipient: canonical.recipient,
+    actionHash,
+  }).address;
+  const risk = assessTransferRisk(
+    {
+      amount: canonical.amount,
+      token: canonical.token,
+      recipient: canonical.recipient,
+      memo: canonical.memo,
+    },
+    safety.decisionResult
+  );
+
+  updateSession(sessionId, {
+    pendingProposal: {
+      proposalType: 'transfer',
+      state: 'awaiting_approval',
+      toolName: 'transfer',
+      toolArgs: {
+        amount: canonical.amount,
+        token: canonical.token,
+        recipient: canonical.recipient,
+        memo: canonical.memo,
+      },
+      toolResult: {
+        ...toolResult,
+        walletSafety: safety.decisionResult,
+        onchainGuard: {
+          actionType: actionMetadata.actionType,
+          actionHash,
+          policyPda: actionMetadata.policyPda,
+          actionApprovalPda,
+          walletSafetyAttestationPda,
+          actionExpiresAt: actionMetadata.actionExpiresAt,
+          actionCreatedAt: actionMetadata.actionCreatedAt,
+        },
+      },
+      createdAt: proposalCreatedAt,
+      expiresAt: getProposalExpiry(),
+      expectedUserAddress: userAddress,
+      network: DEFAULT_SOLANA_NETWORK,
+      actionHash,
+      actionExpiry: safety.actionExpiry,
+      policyPda,
+      actionApprovalPda,
+      walletSafetyAttestationPda,
+      actionType: actionMetadata.actionType,
+      actionCreatedAt: actionMetadata.actionCreatedAt,
+      actionExpiresAt: actionMetadata.actionExpiresAt,
+    },
+  });
+
+  console.log(`[chat] Proposal created: ${sessionId} - transfer ${canonical.amount} ${canonical.token}`);
+
+  const display = generateTransferDisplay({
+    amount: canonical.amount,
+    token: canonical.token,
+    recipient: canonical.recipient,
+    memo: canonical.memo,
+  });
+
+  const proposal: AgentFunctionCallMessage = {
+    type: 'function_call',
+    function: {
+      name: 'transfer',
+      params: {
+        amount: canonical.amount,
+        token: canonical.token,
+        recipient: canonical.recipient,
+        memo: canonical.memo,
+      },
+    },
+    display,
+    risk: {
+      ...risk,
+      walletSafety: safety.decisionResult,
+      requiresExtraConfirmation: safety.decisionResult.requiresExtraConfirmation,
+    },
+    execution: {
+      mode: 'phantom_sign_and_send',
+      network: DEFAULT_SOLANA_NETWORK,
+      expires_at: new Date(getProposalExpiry()).toISOString(),
+      expected_user_address: userAddress,
+    },
+    onchain_guardrail: {
+      action_type: actionMetadata.actionType,
+      action_hash: actionHash,
+      policy_pda: actionMetadata.policyPda,
+      action_approval_pda: actionApprovalPda,
+      wallet_safety_attestation_pda: walletSafetyAttestationPda,
+      action_expires_at: actionMetadata.actionExpiresAt,
+      action_created_at: actionMetadata.actionCreatedAt,
+      action_amount_lamports: actionMetadata.amountLamports,
+      action_recipient: canonical.recipient,
+    },
+    timestamp: now(),
+  };
+
+  await writeSSE(writer, encoder, 'proposal', proposal);
+  await writeSSE(writer, encoder, 'done', { session_id: sessionId, awaiting_approval: true });
+  await writer.close();
 }
 
 async function streamResponseToSSE(
@@ -1269,6 +1920,7 @@ async function streamResponseToSSE(
 async function handleFunctionApprove(request: {
   type: 'function_approve';
   session_id: string;
+  action_hash?: string;
 }): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
@@ -1289,7 +1941,27 @@ async function handleFunctionApprove(request: {
     return jsonResponse({ error: { code: 'proposal_expired', message: 'Pending proposal expired' } }, { status: 400 });
   }
 
-  const { toolArgs, toolName, expectedUserAddress } = pendingProposal;
+  const {
+    toolArgs,
+    toolName,
+    expectedUserAddress,
+    createdAt,
+    actionHash: pendingActionHash,
+    actionExpiry,
+    policyPda,
+    actionApprovalPda,
+    walletSafetyAttestationPda,
+    actionType,
+    actionExpiresAt,
+    actionCreatedAt,
+  } = pendingProposal;
+  if (actionExpiry && isPendingActionExpired(actionExpiry)) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse(
+      { error: { code: 'pending_proposal_expired', message: 'La propuesta expiró y ya no puede aprobarse.' } },
+      { status: 400 }
+    );
+  }
   if (pendingProposal.state !== 'awaiting_approval' && pendingProposal.state !== 'failed') {
     return jsonResponse(
       { error: { code: 'proposal_state_conflict', message: `Cannot approve proposal in state ${pendingProposal.state}` } },
@@ -1404,6 +2076,7 @@ async function handleFunctionApprove(request: {
         recent_blockhash: string;
         last_valid_block_height: number;
         network: 'devnet' | 'mainnet-beta';
+        onchain_guardrail?: NonNullable<AgentFunctionCallMessage['onchain_guardrail']>;
       };
     } = {
       messages: [
@@ -1548,14 +2221,79 @@ async function handleFunctionApprove(request: {
     );
   }
 
+  const transferSafetyDecision = (proposal.toolResult as { walletSafety?: WalletSafetyDecisionResult } | undefined)
+    ?.walletSafety;
+  if (transferSafetyDecision?.decision === 'REJECT') {
+    clearPendingProposal(request.session_id);
+    return jsonResponse({ error: { code: 'proposal_rejected_by_policy', message: 'La propuesta no puede aprobarse por policy de seguridad.' } }, { status: 400 });
+  }
+
+  const canonicalForApprove = buildTransferCanonicalParams({
+    userWallet: session.userAddress,
+    recipient: transferArgs.recipient,
+    amount: transferArgs.amount,
+    token: transferArgs.token,
+    memo: transferArgs.memo,
+  });
+  const expectedActionHash = buildTransferActionHash(canonicalForApprove, createdAt, { policyPda });
+  if (!pendingActionHash || hasActionHashMismatch(expectedActionHash, pendingActionHash)) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse({ error: { code: 'action_hash_mismatch', message: 'La propuesta fue alterada.' } }, { status: 409 });
+  }
+  if (request.action_hash && hasActionHashMismatch(request.action_hash, pendingActionHash)) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse({ error: { code: 'action_hash_mismatch', message: 'El hash de aprobación no coincide con la propuesta.' } }, { status: 409 });
+  }
+  if (!policyPda) {
+    return jsonResponse(
+      {
+        error: {
+          code: 'onchain_guard_context_missing',
+          message: 'No existe contexto de guardrail on-chain para esta propuesta.',
+        },
+      },
+      { status: 400 }
+    );
+  }
+
+  const expectedAmountLamports = Math.round(transferArgs.amount * web3.LAMPORTS_PER_SOL);
+  const readiness = await verifyTransferGuardReadiness({
+    user: session.userAddress,
+    action_hash: pendingActionHash,
+    recipient: transferArgs.recipient,
+    amount_lamports: expectedAmountLamports,
+    actionApprovalPda: actionApprovalPda || undefined,
+    walletSafetyAttestationPda: walletSafetyAttestationPda || undefined,
+    allowMissingApproval: true,
+    allowMissingAttestation: true,
+  });
+  if (!readiness.ok) {
+    clearPendingProposal(request.session_id);
+    return jsonResponse(
+      {
+        error: {
+          code: readiness.reason || 'onchain_guard_unready',
+          message: `La propuesta no está lista para ejecución on-chain: ${readiness.reason || 'unknown'}`,
+        },
+      },
+      { status: 409 }
+    );
+  }
+
   let unsignedTx: { txBase64: string; blockhash: string; lastValidBlockHeight: number };
   try {
     unsignedTx = await buildUnsignedSolTransferTx({
       fromWallet: session.userAddress,
       toWallet: transferArgs.recipient,
       amountSol: transferArgs.amount,
-      recentBlockhash: proposal.recentBlockhash,
-      lastValidBlockHeight: proposal.lastValidBlockHeight,
+      actionMetadata: {
+        actionHash: pendingActionHash,
+        policyPda,
+        actionExpiresAt: actionExpiresAt || actionExpiry || new Date(createdAt + 5 * 60 * 1000).toISOString(),
+        includeCreateActionApproval: Boolean(readiness.actionApprovalMissing),
+        includeWalletSafetyAttestation: Boolean(readiness.walletSafetyAttestationMissing),
+        riskScoreBps: transferSafetyDecision?.riskLevel === 'critical' ? 8_500 : transferSafetyDecision?.riskLevel === 'medium' ? 5_000 : 1_500,
+      },
     });
   } catch (e) {
     updateSession(request.session_id, {
@@ -1583,7 +2321,7 @@ async function handleFunctionApprove(request: {
     messages: [
       {
         type: 'text',
-        content: `Transacción preparada. Revisa y firma en tu wallet para enviar ${transferArgs.amount} ${transferArgs.token || 'SOL'} a ${shortRecipient}.`,
+        content: `Transacción preparada con guardrail on-chain. Revisa y firma en tu wallet para enviar ${transferArgs.amount} ${transferArgs.token || 'SOL'} a ${shortRecipient}.`,
         timestamp: now(),
       },
     ],
@@ -1611,6 +2349,7 @@ async function handleFunctionApprove(request: {
       recent_blockhash: string;
       last_valid_block_height: number;
       network: 'devnet' | 'mainnet-beta';
+      onchain_guardrail?: NonNullable<AgentFunctionCallMessage['onchain_guardrail']>;
     };
   } = {
     ...response,
@@ -1624,6 +2363,17 @@ async function handleFunctionApprove(request: {
       recent_blockhash: unsignedTx.blockhash,
       last_valid_block_height: unsignedTx.lastValidBlockHeight,
       network: proposal.network,
+      onchain_guardrail: {
+        action_type: actionType || 'TRANSFER_SOL_GUARDED',
+        action_hash: pendingActionHash,
+        policy_pda: policyPda,
+        action_approval_pda: actionApprovalPda || '',
+        wallet_safety_attestation_pda: walletSafetyAttestationPda || '',
+        action_expires_at: actionExpiresAt || actionExpiry || new Date(createdAt + 5 * 60 * 1000).toISOString(),
+        action_created_at: actionCreatedAt || new Date(createdAt).toISOString(),
+        action_amount_lamports: expectedAmountLamports,
+        action_recipient: transferArgs.recipient,
+      },
     },
   };
 

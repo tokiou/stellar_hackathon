@@ -22,6 +22,14 @@ export type PendingProposal = {
   recentBlockhash?: string;
   lastValidBlockHeight?: number;
   txSignature?: string;
+  actionHash?: string;
+  actionExpiry?: string;
+  policyPda?: string;
+  actionApprovalPda?: string;
+  walletSafetyAttestationPda?: string;
+  actionType?: string;
+  actionCreatedAt?: string;
+  actionExpiresAt?: string;
 };
 
 export type SessionState = {
