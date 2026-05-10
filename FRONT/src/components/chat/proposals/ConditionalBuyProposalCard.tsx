@@ -35,8 +35,19 @@ export function ConditionalBuyProposalCard({
   const details = [
     { label: 'Entrada', value: `${params.input_amount} ${params.input_token}` },
     { label: 'Objetivo', value: `${params.target_price_usd} USD/SOL` },
-    { label: 'Min. salida', value: params.min_sol_out ? `${params.min_sol_out} SOL` : 'No especificado' },
+    { label: 'SOL objetivo', value: `${params.desired_sol_amount || params.min_sol_out || '—'} SOL` },
+    { label: 'Max USDC', value: `${params.max_usdc_in || params.input_amount} USDC` },
+    { label: 'Recipient', value: params.recipient ? `${params.recipient.slice(0, 6)}…${params.recipient.slice(-4)}` : 'Tú' },
   ];
+  if (params.order_pda) {
+    details.push({ label: 'Orden', value: `${params.order_pda.slice(0, 6)}…${params.order_pda.slice(-4)}` });
+  }
+  if (params.expires_at) {
+    const expiryDate = new Date(params.expires_at);
+    if (!Number.isNaN(expiryDate.getTime())) {
+      details.push({ label: 'Expira', value: expiryDate.toLocaleString() });
+    }
+  }
 
   return (
     <div className="rounded-2xl border border-outline bg-surface p-6 shadow-sm">

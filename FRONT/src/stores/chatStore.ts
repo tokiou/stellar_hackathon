@@ -122,7 +122,7 @@ function makeWelcomeMessage(): AgentChatMessage {
     id: toId('welcome'),
     role: 'agent',
     type: 'text',
-    content: 'Hola, soy tu Wallet Copilot. Dime qué quieres hacer en Solana y te ayudaré a hacerlo de forma segura.',
+    content: 'Hola, soy Compass. Dime qué quieres hacer en Solana y te ayudaré a hacerlo de forma segura.',
     timestamp: isoNow(),
   };
 }

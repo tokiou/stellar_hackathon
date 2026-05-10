@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   AgentMessageResponse as AgentMessageResponseType,
   ApiError,
+  ConditionalOrderSnapshot,
   GetAllocationResponse,
   GetBalancesResponse,
   GetNetworkStatusResponse,
@@ -16,6 +17,9 @@ import {
   GetAllocationResponseSchema,
   GetBalancesResponseSchema,
   GetNetworkStatusResponseSchema,
+  ConditionalOrderSchema,
+  ConditionalOrderListResponseSchema,
+  ConditionalOrderTriggerResponseSchema,
   GetPricesResponseSchema,
   GetTransactionsResponseSchema,
   SSEProposalSchema,
@@ -340,4 +344,30 @@ export function getNetworkStatus(): Promise<GetNetworkStatusResponse> {
 
 export function getPrices(symbols: string[]): Promise<GetPricesResponse> {
   return getJson(`/api/prices?symbols=${encodeURIComponent(symbols.join(','))}`, GetPricesResponseSchema) as Promise<GetPricesResponse>;
+}
+
+export function getConditionalOrders(userAddress: string): Promise<ConditionalOrderSnapshot[]> {
+  return getJson(`/api/conditional-orders?user=${encodeURIComponent(userAddress)}`, ConditionalOrderListResponseSchema) as Promise<
+    ConditionalOrderSnapshot[]
+  >;
+}
+
+export function getConditionalOrder(orderPda: string): Promise<ConditionalOrderSnapshot> {
+  return getJson(`/api/conditional-orders/${encodeURIComponent(orderPda)}`, ConditionalOrderSchema) as Promise<ConditionalOrderSnapshot>;
+}
+
+export function triggerConditionalOrder(orderPda: string): Promise<{
+  status: 'triggered';
+  orderPda: string;
+  tx_signature: string;
+}> {
+  return postJson(
+    `/api/conditional-orders/${encodeURIComponent(orderPda)}`,
+    { trigger_now: true },
+    ConditionalOrderTriggerResponseSchema,
+  ) as Promise<{
+    status: 'triggered';
+    orderPda: string;
+    tx_signature: string;
+  }>;
 }
