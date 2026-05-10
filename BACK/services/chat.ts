@@ -31,6 +31,8 @@ import {
   buildConditionalBuyCreateOrderTx,
   toConditionalBuyProposalPayload,
 } from './tools/conditionalBuySol';
+import { quoteOrcaUsdcToSol, type OrcaSwapParams } from './tools/orcaSwap';
+import { buildUnsignedOrcaSwapTx } from './tools/orcaSwapTx';
 import {
   callAzureResponsesStream,
   callAzureResponses,
@@ -82,8 +84,8 @@ type AgentTextMessage = {
 type AgentFunctionCallMessage = {
   type: 'function_call';
   function: {
-    name: 'transfer' | 'conditional_buy_sol';
-    params: TransferParams | ConditionalBuySolParams;
+    name: 'transfer' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
+    params: TransferParams | ConditionalBuySolParams | OrcaSwapParams;
   };
   execution?: {
     mode: 'phantom_sign_and_send' | 'phantom_execute_then_optional_backend_proof';
@@ -184,7 +186,25 @@ const CONDITIONAL_BUY_SOL_TOOL: ResponsesToolDefinition = {
   },
 };
 
-const ALL_TOOLS = [TRANSFER_TOOL, CONDITIONAL_BUY_SOL_TOOL];
+const ORCA_SWAP_TOOL: ResponsesToolDefinition = {
+  type: 'function',
+  name: 'swap_orca_usdc_to_sol',
+  description:
+    'Prepara un swap real en Orca devnet entre USDC y SOL. ' +
+    'Usar cuando el usuario pida swap USDC->SOL o SOL->USDC.',
+  parameters: {
+    type: 'object',
+    properties: {
+      input_token: { type: 'string', enum: ['USDC', 'SOL'] },
+      output_token: { type: 'string', enum: ['USDC', 'SOL'] },
+      input_amount: { type: 'number', description: 'Monto de USDC a convertir' },
+      slippage_bps: { type: 'number', description: 'Slippage en bps (default 100 = 1%)' },
+    },
+    required: ['input_token', 'output_token', 'input_amount'],
+  },
+};
+
+const ALL_TOOLS = [TRANSFER_TOOL, CONDITIONAL_BUY_SOL_TOOL, ORCA_SWAP_TOOL];
 
 const DEFAULT_SOLANA_NETWORK: SolanaNetwork = 'devnet';
 const PROPOSAL_TTL_MS = 5 * 60 * 1000;
@@ -411,7 +431,7 @@ async function handleUserMessage(request: {
 
       // Check for tool calls in output
       const toolCall = initialResponse.output?.find(
-        (o) => o.type === 'function_call' && (o.name === 'transfer' || o.name === 'conditional_buy_sol')
+        (o) => o.type === 'function_call' && (o.name === 'transfer' || o.name === 'conditional_buy_sol' || o.name === 'swap_orca_usdc_to_sol')
       );
 
         if (toolCall && toolCall.name) {
@@ -426,8 +446,16 @@ async function handleUserMessage(request: {
             conversationInput,
             systemInstruction
           );
-        } else {
+        } else if (toolCall.name === 'conditional_buy_sol') {
           await handleConditionalBuyToolCall(
+            { name: toolCall.name, arguments: toolCall.arguments },
+            sessionId,
+            session,
+            writer,
+            encoder
+          );
+        } else {
+          await handleOrcaSwapToolCall(
             { name: toolCall.name, arguments: toolCall.arguments },
             sessionId,
             session,
@@ -468,6 +496,81 @@ async function handleUserMessage(request: {
       Connection: 'keep-alive',
     },
   });
+}
+
+async function handleOrcaSwapToolCall(
+  toolCall: { name: string; arguments?: string },
+  sessionId: string,
+  session: SessionState,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  encoder: TextEncoder
+) {
+  let toolArgs: OrcaSwapParams;
+  try {
+    const parsed = JSON.parse(toolCall.arguments || '{}');
+    toolArgs = {
+      input_token: parsed.input_token,
+      output_token: parsed.output_token,
+      input_amount: parsed.input_amount,
+      slippage_bps: parsed.slippage_bps,
+    } as OrcaSwapParams;
+  } catch {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'invalid_tool_args',
+      message: 'Could not parse swap_orca_usdc_to_sol args',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+    return;
+  }
+
+  try {
+    const quote = await quoteOrcaUsdcToSol(toolArgs);
+
+    updateSession(sessionId, {
+      pendingProposal: {
+        proposalType: 'swap_orca_usdc_to_sol',
+        state: 'awaiting_approval',
+        toolName: 'swap_orca_usdc_to_sol',
+        toolArgs: { ...toolArgs, quote },
+        toolResult: { status: 'prepared', reason: 'READY_FOR_ORCA_SWAP_APPROVAL' },
+        createdAt: Date.now(),
+        expiresAt: getProposalExpiry(),
+        expectedUserAddress: session.userAddress,
+        network: DEFAULT_SOLANA_NETWORK,
+      },
+    });
+
+    const outAmount =
+      toolArgs.output_token === 'SOL'
+        ? Number(quote.estimated_output_base_units) / 1_000_000_000
+        : Number(quote.estimated_output_base_units) / 1_000_000;
+    const proposal: AgentFunctionCallMessage = {
+      type: 'function_call',
+      function: { name: 'swap_orca_usdc_to_sol', params: toolArgs },
+      display: {
+        summary: `Swap Orca: ${toolArgs.input_amount} ${toolArgs.input_token} -> ~${outAmount.toFixed(6)} ${toolArgs.output_token}`,
+        provider: 'orca_whirlpools_devnet',
+      },
+      risk: {
+        score: 35,
+        level: 'medium',
+        reasons: ['Ejecución real de swap en Orca devnet', `Slippage ${quote.slippage_bps} bps`],
+      },
+      timestamp: now(),
+    };
+
+    await writeSSE(writer, encoder, 'proposal', proposal);
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId, awaiting_approval: true });
+    await writer.close();
+  } catch (e) {
+    await writeSSE(writer, encoder, 'error', {
+      code: 'orca_quote_failed',
+      message: e instanceof Error ? e.message : 'Orca quote failed',
+    });
+    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+    await writer.close();
+  }
 }
 
 async function handleConditionalBuyToolCall(
@@ -976,6 +1079,104 @@ async function handleFunctionApprove(request: {
     return jsonResponse(response, { status: 200 });
   }
 
+  if (toolName === 'swap_orca_usdc_to_sol') {
+    const swapArgs = toolArgs as OrcaSwapParams & { quote?: unknown };
+    if (!session.userAddress) {
+      clearPendingProposal(request.session_id);
+      return jsonResponse(
+        { error: { code: 'no_wallet', message: 'No wallet connected in session' } },
+        { status: 400 }
+      );
+    }
+
+    let unsigned;
+    try {
+      unsigned = await buildUnsignedOrcaSwapTx({
+        userAddress: session.userAddress,
+        inputToken: swapArgs.input_token,
+        outputToken: swapArgs.output_token,
+        inputAmount: swapArgs.input_amount,
+        slippageBps: swapArgs.slippage_bps,
+      });
+    } catch (e) {
+      updateSession(request.session_id, {
+        pendingProposal: {
+          ...proposal,
+          state: 'failed',
+        },
+      });
+      return jsonResponse(
+        {
+          error: {
+            code: 'orca_tx_build_failed',
+            message: e instanceof Error ? e.message : 'Failed to build Orca swap transaction',
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    // Note: We don't set execute.status here because the transaction hasn't been signed/sent yet.
+    // The frontend will sign, send, and set the real status + tx_hash.
+    const response: {
+      messages: AgentMessage[];
+      proposal_state: { state: 'awaiting_signature'; expires_at: string };
+      swap_execution: {
+        provider: string;
+        pair: string;
+        input_amount: number;
+        slippage_bps: number;
+        quote: unknown;
+      };
+      transaction: {
+        format: 'base64_versioned_transaction' | 'base64_legacy_transaction';
+        unsigned_tx_base64: string;
+        recent_blockhash: string;
+        last_valid_block_height: number;
+        network: 'devnet';
+        execution_type: 'orca_swap';
+      };
+    } = {
+      messages: [
+        {
+          type: 'text',
+          content: `Swap preparado: ${swapArgs.input_amount} ${swapArgs.input_token} → ${swapArgs.output_token}. Firma en tu wallet para ejecutar.`,
+          timestamp: now(),
+        },
+      ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: new Date(proposal.expiresAt).toISOString(),
+      },
+      swap_execution: {
+        provider: 'orca_whirlpools_devnet',
+        pair: `${swapArgs.input_token}/${swapArgs.output_token}`,
+        input_amount: swapArgs.input_amount,
+        slippage_bps: swapArgs.slippage_bps ?? 100,
+        quote: (swapArgs as any).quote ?? null,
+      },
+      transaction: {
+        format: unsigned.isVersioned ? 'base64_versioned_transaction' : 'base64_legacy_transaction',
+        unsigned_tx_base64: unsigned.unsignedTxBase64,
+        recent_blockhash: unsigned.recentBlockhash,
+        last_valid_block_height: unsigned.lastValidBlockHeight,
+        network: 'devnet',
+        execution_type: 'orca_swap',
+      },
+    };
+
+    updateSession(request.session_id, {
+      pendingProposal: {
+        ...proposal,
+        state: 'awaiting_signature',
+        recentBlockhash: unsigned.recentBlockhash,
+        lastValidBlockHeight: unsigned.lastValidBlockHeight,
+      },
+    });
+
+    return jsonResponse(response, { status: 200 });
+  }
+
   const transferArgs = toolArgs as TransferParams;
   if (!session.userAddress) {
     clearPendingProposal(request.session_id);
@@ -1014,6 +1215,8 @@ async function handleFunctionApprove(request: {
 
   const shortRecipient = `${transferArgs.recipient.slice(0, 4)}...${transferArgs.recipient.slice(-4)}`;
 
+  // Note: We don't set execute.status here because the transaction hasn't been signed/sent yet.
+  // The frontend will sign, send, and set the real status + tx_hash.
   const response: { messages: AgentMessage[] } = {
     messages: [
       {

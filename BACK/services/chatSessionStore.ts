@@ -15,7 +15,7 @@ export type PendingProposal = {
   toolResult: Record<string, unknown>;
   createdAt: number;
   state: ProposalState;
-  proposalType: 'transfer' | 'conditional_buy_sol';
+  proposalType: 'transfer' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
   expiresAt: number;
   expectedUserAddress: string | null;
   network: SolanaNetwork;

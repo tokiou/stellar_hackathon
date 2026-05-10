@@ -12,7 +12,7 @@ export function ProposalCard({
   disabled?: boolean;
   blockReason: ConversationActionBlockReason | null;
 }) {
-  if (proposal.function.name === 'swap') {
+  if (proposal.function.name === 'swap' || proposal.function.name === 'swap_orca_usdc_to_sol') {
     return <SwapProposalCard proposal={proposal} disabled={disabled} blockReason={blockReason} />;
   }
   if (proposal.function.name === 'transfer') return <SendProposalCard proposal={proposal} disabled={disabled} blockReason={blockReason} />;

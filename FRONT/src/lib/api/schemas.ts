@@ -39,6 +39,13 @@ export const StakeParamsSchema = z.object({
   validator: z.string(),
 });
 
+export const OrcaSwapParamsSchema = z.object({
+  input_token: z.enum(['USDC', 'SOL']),
+  output_token: z.enum(['USDC', 'SOL']),
+  input_amount: z.number().positive(),
+  slippage_bps: z.number().optional(),
+});
+
 export const ConditionalBuySolParamsSchema = z.object({
   input_token: z.literal('USDC'),
   input_amount: z.number().positive(),
@@ -74,8 +81,14 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('function_call'),
     function: z.object({
-      name: z.enum(['swap', 'transfer', 'stake', 'conditional_buy_sol']),
-      params: z.union([SwapParamsSchema, TransferParamsSchema, StakeParamsSchema, ConditionalBuySolParamsSchema]),
+      name: z.enum(['swap', 'transfer', 'stake', 'conditional_buy_sol', 'swap_orca_usdc_to_sol']),
+      params: z.union([
+        SwapParamsSchema,
+        TransferParamsSchema,
+        StakeParamsSchema,
+        ConditionalBuySolParamsSchema,
+        OrcaSwapParamsSchema,
+      ]),
     }),
     display: z.object({
       summary: z.string(),
@@ -95,8 +108,26 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
+// Transaction payload schema returned by backend on approve
+export const TransactionPayloadSchema = z.object({
+  format: z.enum(['base64_versioned_transaction', 'base64_legacy_transaction']),
+  unsigned_tx_base64: z.string(),
+  recent_blockhash: z.string().optional(),
+  last_valid_block_height: z.number().optional(),
+  network: z.string().optional(),
+  execution_type: z.string().optional(),
+});
+
 export const AgentMessageResponseSchema = z.object({
   messages: z.array(AgentMessageSchema),
+  transaction: TransactionPayloadSchema.optional(),
+  swap_execution: z.object({
+    provider: z.string(),
+    pair: z.string(),
+    input_amount: z.number(),
+    slippage_bps: z.number(),
+    quote: z.unknown().nullable(),
+  }).optional(),
 });
 
 export const FunctionApproveResponseSchema = AgentMessageResponseSchema.extend({
@@ -104,15 +135,11 @@ export const FunctionApproveResponseSchema = AgentMessageResponseSchema.extend({
     state: z.literal('awaiting_signature'),
     expires_at: z.string(),
   }),
-  transaction: z
-    .object({
-      format: z.literal('base64_versioned_transaction'),
-      unsigned_tx_base64: z.string(),
-      recent_blockhash: z.string(),
-      last_valid_block_height: z.number().int(),
-      network: z.enum(['devnet', 'mainnet-beta']),
-    })
-    .optional(),
+  transaction: TransactionPayloadSchema.extend({
+    recent_blockhash: z.string(),
+    last_valid_block_height: z.number().int(),
+    network: z.enum(['devnet', 'mainnet-beta']),
+  }).optional(),
 });
 
 export const ChatFunctionResultSchema = z.object({
@@ -232,10 +259,17 @@ export const SSEProposalSchema = z.object({
     name: z.union([
       z.literal('transfer'),
       z.literal('conditional_buy_sol'),
+      z.literal('swap_orca_usdc_to_sol'),
       z.literal('swap'),
       z.literal('stake'),
     ]),
-    params: z.union([TransferParamsSchema, SwapParamsSchema, StakeParamsSchema, ConditionalBuySolParamsSchema]),
+    params: z.union([
+      TransferParamsSchema,
+      SwapParamsSchema,
+      StakeParamsSchema,
+      ConditionalBuySolParamsSchema,
+      OrcaSwapParamsSchema,
+    ]),
   }),
   display: z.object({
     summary: z.string(),
@@ -243,11 +277,13 @@ export const SSEProposalSchema = z.object({
     provider: z.string().optional(),
   }),
   risk: RiskInfoSchema,
-  execution: z.object({
-    mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
-    network: z.enum(['devnet', 'mainnet-beta']),
-    expires_at: z.string(),
-    expected_user_address: z.string().optional(),
-  }),
+  execution: z
+    .object({
+      mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
+      network: z.enum(['devnet', 'mainnet-beta']),
+      expires_at: z.string(),
+      expected_user_address: z.string().optional(),
+    })
+    .optional(),
   timestamp: z.string(),
 });

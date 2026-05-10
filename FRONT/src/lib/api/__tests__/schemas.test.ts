@@ -5,6 +5,7 @@ import {
   FunctionApproveResponseSchema,
   FunctionExecutionSchema,
   ConditionalBuySolParamsSchema,
+  TransactionPayloadSchema,
   SSEProposalSchema,
   ConditionalOrderListResponseSchema,
   ConditionalOrderTriggerResponseSchema,
@@ -29,6 +30,69 @@ describe('api schemas', () => {
     });
 
     expect(parsed.messages[0].type).toBe('function_call');
+  });
+
+  it('validates approve response with transaction payload', () => {
+    const parsed = AgentMessageResponseSchema.parse({
+      messages: [
+        {
+          type: 'text',
+          content: 'Transfer prepared. Sign in your wallet to execute.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      transaction: {
+        format: 'base64_versioned_transaction',
+        unsigned_tx_base64: 'dGVzdA==', // "test" in base64
+        recent_blockhash: 'abc123',
+        last_valid_block_height: 12345,
+        network: 'devnet',
+      },
+    });
+
+    expect(parsed.messages[0].type).toBe('text');
+    expect(parsed.transaction).toBeDefined();
+    expect(parsed.transaction?.format).toBe('base64_versioned_transaction');
+    expect(parsed.transaction?.unsigned_tx_base64).toBe('dGVzdA==');
+  });
+
+  it('validates swap execution response with transaction', () => {
+    const parsed = AgentMessageResponseSchema.parse({
+      messages: [
+        {
+          type: 'text',
+          content: 'Swap prepared: 10 USDC → SOL. Sign to execute.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      transaction: {
+        format: 'base64_legacy_transaction',
+        unsigned_tx_base64: 'c3dhcHR4', // "swaptx" in base64
+        recent_blockhash: 'xyz789',
+        network: 'devnet',
+        execution_type: 'orca_swap_usdc_to_sol',
+      },
+      swap_execution: {
+        provider: 'orca_whirlpools_devnet',
+        pair: 'USDC/SOL',
+        input_amount: 10,
+        slippage_bps: 100,
+        quote: null,
+      },
+    });
+
+    expect(parsed.transaction?.format).toBe('base64_legacy_transaction');
+    expect(parsed.swap_execution?.provider).toBe('orca_whirlpools_devnet');
+  });
+
+  it('validates transaction payload schema', () => {
+    const parsed = TransactionPayloadSchema.parse({
+      format: 'base64_versioned_transaction',
+      unsigned_tx_base64: 'dGVzdA==',
+    });
+
+    expect(parsed.format).toBe('base64_versioned_transaction');
+    expect(parsed.unsigned_tx_base64).toBe('dGVzdA==');
   });
 
   it('validates wallet balances', () => {
@@ -96,6 +160,41 @@ describe('api schemas', () => {
     expect(parsed.proposal_state.state).toBe('awaiting_signature');
     expect(parsed.transaction?.unsigned_tx_base64).toBe('AQB0ZXN0');
     expect(parsed.messages[0].type).toBe('text');
+  });
+
+  it('validates swap approve response with proposal_state and swap execution', () => {
+    const parsed = FunctionApproveResponseSchema.parse({
+      messages: [
+        {
+          type: 'text',
+          content: 'Swap preparado. Firma en tu wallet para ejecutar.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      transaction: {
+        format: 'base64_versioned_transaction',
+        unsigned_tx_base64: 'AQB0ZXN0',
+        recent_blockhash: 'testhash',
+        last_valid_block_height: 1234,
+        network: 'devnet',
+        execution_type: 'orca_swap',
+      },
+      swap_execution: {
+        provider: 'orca_whirlpools_devnet',
+        pair: 'SOL/USDC',
+        input_amount: 0.5,
+        slippage_bps: 100,
+        quote: null,
+      },
+    });
+
+    expect(parsed.proposal_state.state).toBe('awaiting_signature');
+    expect(parsed.swap_execution?.provider).toBe('orca_whirlpools_devnet');
+    expect(parsed.transaction?.execution_type).toBe('orca_swap');
   });
 
   it('allows conditional buy proposal params and execution envelope', () => {
