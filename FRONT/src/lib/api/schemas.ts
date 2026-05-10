@@ -146,6 +146,52 @@ export const AgentMessageSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
+export const SessionHistoryTextMessageSchema = z.object({
+  role: z.enum(['user', 'agent', 'system']),
+  type: z.literal('text'),
+  content: z.string(),
+  execute: ExecuteSchema.optional(),
+  timestamp: z.string(),
+});
+
+export const SessionHistoryFunctionCallMessageSchema = z.object({
+  role: z.literal('agent'),
+  type: z.literal('function_call'),
+  function: z.object({
+    name: z.enum(['swap', 'transfer', 'stake', 'conditional_buy_sol', 'swap_orca_usdc_to_sol']),
+    params: z.union([
+      SwapParamsSchema,
+      TransferParamsSchema,
+      StakeParamsSchema,
+      ConditionalBuySolParamsSchema,
+      OrcaSwapParamsSchema,
+    ]),
+  }),
+  display: z.object({
+    summary: z.string(),
+    fee_usd: z.number().optional(),
+    provider: z.string().optional(),
+    slippage_bps: z.number().optional(),
+  }),
+  risk: RiskInfoSchema,
+  execution: FunctionExecutionSchema.optional(),
+  timestamp: z.string(),
+});
+
+export const SessionHistoryAlertMessageSchema = z.object({
+  role: z.literal('agent'),
+  type: z.literal('alert'),
+  severity: z.enum(['info', 'warning', 'danger']),
+  content: z.string(),
+  timestamp: z.string(),
+});
+
+export const SessionHistoryMessageSchema = z.discriminatedUnion('type', [
+  SessionHistoryTextMessageSchema,
+  SessionHistoryFunctionCallMessageSchema,
+  SessionHistoryAlertMessageSchema,
+]);
+
 // Transaction payload schema returned by backend on approve
 export const TransactionPayloadSchema = z.object({
   format: z.enum(['base64_versioned_transaction', 'base64_legacy_transaction']),
@@ -204,6 +250,14 @@ export const FunctionApproveResponseSchema = AgentMessageResponseSchema.extend({
   }).optional(),
   swap_guard: SwapGuardSchema.optional(),
   swap_guard_warning: SwapGuardWarningSchema.optional(),
+});
+
+export const GetHistoryResponseSchema = z.object({
+  session_id: z.string(),
+  user_address: z.string().nullable(),
+  updated_at: z.string(),
+  messages: z.array(SessionHistoryMessageSchema),
+  pending_proposal: SessionHistoryFunctionCallMessageSchema.nullable(),
 });
 
 export const ChatFunctionResultSchema = z.object({

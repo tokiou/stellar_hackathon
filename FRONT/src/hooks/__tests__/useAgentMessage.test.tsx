@@ -21,11 +21,13 @@ vi.mock('../../lib/api/client', async () => {
     streamChat: vi.fn(),
     postApprove: vi.fn(),
     postReject: vi.fn(),
+    getHistory: vi.fn(),
   };
 });
 
 const mockedStreamChat = vi.mocked(chatApi.streamChat);
 const mockedPostApprove = vi.mocked(chatApi.postApprove);
+const mockedGetHistory = vi.mocked(chatApi.getHistory);
 
 function wrapperFactory() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -59,6 +61,13 @@ describe('useAgentMessage', () => {
     } as unknown as ReturnType<typeof useWallet>);
 
     mockedStreamChat.mockResolvedValue(undefined);
+    mockedGetHistory.mockResolvedValue({
+      session_id: 'session-1',
+      user_address: 'wallet-1',
+      updated_at: new Date().toISOString(),
+      messages: [],
+      pending_proposal: null,
+    });
   });
 
   afterEach(() => {
@@ -137,6 +146,70 @@ describe('useAgentMessage', () => {
     });
 
     expect(mockedPostApprove).not.toHaveBeenCalled();
+  });
+
+  it('rehydrates active session from backend when sessionId is present', async () => {
+    useChatStore.getState().setSessionId('session-hydrate');
+    mockedGetHistory.mockResolvedValueOnce({
+      session_id: 'session-hydrate',
+      user_address: 'wallet-1',
+      updated_at: new Date().toISOString(),
+      messages: [
+        {
+          id: 'agent-1',
+          role: 'agent',
+          type: 'text',
+          content: 'Hola, te ayudo.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      pending_proposal: {
+        id: 'pending-1',
+        role: 'agent',
+        type: 'function_call',
+        function: {
+          name: 'transfer',
+          params: {
+            amount: 1,
+            token: 'SOL',
+            recipient: '11111111111111111111111111111111',
+          },
+        },
+        display: {
+          summary: 'Transfer 1 SOL',
+        },
+        risk: {
+          score: 10,
+          level: 'low',
+        },
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    const { result } = renderHook(() => useAgentMessage(), { wrapper: wrapperFactory() });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().sessionId).toBe('session-hydrate');
+      expect(result.current.error).toBeNull();
+      expect(
+        useChatStore
+          .getState()
+          .messages.some((message) => message.type === 'text' && message.content === 'Hola, te ayudo.'),
+      ).toBe(true);
+      expect(useChatStore.getState().pendingProposal?.id).toBe('pending-1');
+    });
+  });
+
+  it('clears local session when history API returns session_not_found', async () => {
+    useChatStore.getState().setSessionId('session-removed');
+    mockedGetHistory.mockRejectedValueOnce(new ApiClientError({ code: 'session_not_found', message: 'expired' }, 404));
+
+    renderHook(() => useAgentMessage(), { wrapper: wrapperFactory() });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().sessionId).toBeNull();
+      expect(useChatStore.getState().messages).toHaveLength(1);
+    });
   });
 
   it('forces expired conversation when backend returns session_not_found', async () => {

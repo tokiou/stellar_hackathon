@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "status": "planned",
+  "status": "completed",
   "goal": "Mover la sesion de chat al backend para que el transcript y pendingProposal sean administrados server-side, y el frontend persista y use solamente el session_id activo para rehidratar la conversacion.",
   "context": {
     "source": "explorer_handoff",
@@ -39,11 +39,14 @@
         "BACK/services/chatSessionStore.ts"
       ],
       "dependencies": [],
-      "verification": [
-        "Tests unitarios cubren creacion de sesion, append de mensajes, lectura serializable y expiracion TTL."
-      ],
-      "status": "pending",
-      "evidence": []
+    "verification": [
+      "Tests unitarios cubren creacion de sesion, append de mensajes, lectura serializable y expiracion TTL."
+    ],
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: Extendido BACK/services/chatSessionStore.ts con `appendSessionMessages`, `appendSessionMessage`, limpieza de propuestas y TTL expirable (`BACK/services/__tests__/chatSessionStore.test.ts`).",
+        "2026-05-10: npx vitest --run BACK/services/__tests__/chatSessionStore.test.ts (PASS)."
+      ]
     },
     {
       "id": "T2",
@@ -60,8 +63,13 @@
         "Tests de chat validan que el input al LLM incluye historial previo de la sesion.",
         "Tests validan persistencia coherente de pendingProposal y eventos de resultado."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: `BACK/services/chat.ts` usa ahora `appendSessionMessage` para persistir mensajes del usuario y `toHistoryPrompt` para construir input de Azure con historial acumulado al llamar `user_message`.",
+        "2026-05-10: `npx vitest --run BACK/services/__tests__/chat.test.ts` valida que el input del modelo incluye mensajes previos y que la sesión se maneja en backend.",
+        "2026-05-10: Aprobación y rechazo conservan `pendingProposal` en `SessionState` para posterior rehidratación.",
+        "2026-05-10: Main-session integration fix: `streamResponseToSSE` ahora retorna/persiste texto acumulado o texto terminal de eventos `response.*.done`, cubierto por regresión backend."
+      ]
     },
     {
       "id": "T3",
@@ -79,8 +87,12 @@
         "Tests cubren respuesta exitosa de get_history.",
         "Tests cubren 404/session_not_found cuando la sesion falta o expiro."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: Agregado `handleGetHistory` y contrato `get_history` en `BACK/services/chat.ts` con respuesta `session_not_found` cuando vence o no existe sesión.",
+        "2026-05-10: `app/api/chat/route.ts` mantiene `POST /api/chat` proxy hacia `proxyAgenticChat` con request tipo `get_history`.",
+        "2026-05-10: `npx vitest --run BACK/services/__tests__/chat.test.ts` cubre éxito de get_history y 404 `session_not_found`."
+      ]
     },
     {
       "id": "T4",
@@ -98,8 +110,11 @@
         "Tests del store prueban que localStorage solo contiene sessionId.",
         "Tests prueban que mensajes y pendingProposal no sobreviven por persistencia local."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: `FRONT/src/stores/chatStore.ts` quedó con `partialize` solo con `activeWalletAddress` y `sessionId` para persistencia mínima.",
+        "2026-05-10: `npx vitest --run FRONT/src/stores/__tests__/chatStore.test.ts` valida que no se persisten mensajes/conversaciones/pendingProposal localmente."
+      ]
     },
     {
       "id": "T5",
@@ -120,8 +135,11 @@
         "Tests del hook validan rehidratacion exitosa desde sessionId persistido.",
         "Tests validan limpieza local cuando get_history devuelve session_not_found."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: Añadidos `getHistory` y `hydrateSessionHistory` en cliente/estado (`FRONT/src/lib/api/client.ts`, `FRONT/src/stores/chatStore.ts`) y llamado automático en `useAgentMessage` al montar.",
+        "2026-05-10: `npx vitest --run FRONT/src/hooks/__tests__/useAgentMessage.test.tsx FRONT/src/lib/api/__tests__/client.test.ts` valida rehidratación exitosa y limpieza ante `session_not_found`."
+      ]
     },
     {
       "id": "T6",
@@ -140,8 +158,11 @@
         "La UI no muestra mensajes stale recuperados desde localStorage.",
         "La navegacion del chat sigue siendo coherente cuando no existe historial durable multi-conversacion."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: `FRONT/src/components/sidebar/ChatHistoryList.tsx` actualizado para renderizar la sesión activa única y estado de sesión/alertas de sesión y wallet.",
+        "2026-05-10: `FRONT/src/stores/chatStore.ts` adapta acciones de sesión para no depender de historial durable multi-conversación."
+      ]
     },
     {
       "id": "T7",
@@ -166,8 +187,14 @@
         "Prueba manual: expirar o invalidar sessionId y verificar que la UI reinicia la sesion.",
         "Prueba manual: proposal pendiente sigue visible tras refresh si la sesion continua vigente."
       ],
-      "status": "pending",
-      "evidence": []
+      "status": "completed",
+      "evidence": [
+        "2026-05-10: Añadidos y ajustados tests backend/frontend de ownership/re-hidratación (`BACK/services/__tests__/chat.test.ts`, `FRONT/src/stores/__tests__/chatStore.test.ts`, `FRONT/src/hooks/__tests__/useAgentMessage.test.tsx`).",
+        "2026-05-10: `npm run test:back -- BACK/services/__tests__/chatSessionStore.test.ts BACK/services/__tests__/chat.test.ts` (20/20 tests passed).",
+        "2026-05-10: `npx vitest --run FRONT/src/stores/__tests__/chatStore.test.ts FRONT/src/hooks/__tests__/useAgentMessage.test.tsx FRONT/src/lib/api/__tests__/client.test.ts FRONT/src/lib/api/__tests__/schemas.test.ts` (35/35 tests passed).",
+        "2026-05-10: `npm run build` passed; only pre-existing warnings for Next ESLint plugin/fast-refresh export and bigint native binding fallback.",
+        "Pendiente validar manualmente: refresh con sesión vigente, expiración manual `session_not_found` y propuesta pendiente post-rehidratación (no ejecutado en este ciclo)."
+      ]
     }
   ],
   "risks": [

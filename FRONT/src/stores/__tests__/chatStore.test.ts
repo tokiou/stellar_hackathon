@@ -180,4 +180,26 @@ describe('chatStore conversation persistence', () => {
     expect(useChatStore.getState().activeConversationId).not.toBe(originalConversationId);
     expect(useChatStore.getState().getActiveConversationReadOnlyReason()).toBeNull();
   });
+
+  it('persists only session_id and activeWalletAddress', async () => {
+    const state = useChatStore.getState();
+    state.setCurrentWalletAddress('wallet-1');
+    state.setSessionId('session-minimal');
+    state.addUserMessage('Mensaje local');
+
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 0);
+    });
+
+    const rawStored = inMemoryStorage[STORAGE_KEY];
+    const stored = typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored;
+
+    expect(stored?.state?.sessionId).toBe('session-minimal');
+    expect(stored?.state?.activeWalletAddress).toBe('wallet-1');
+    expect(stored?.state?.messages).toBeUndefined();
+    expect(stored?.state?.conversationsById).toBeUndefined();
+    expect(stored?.state?.pendingProposal).toBeUndefined();
+  });
 });

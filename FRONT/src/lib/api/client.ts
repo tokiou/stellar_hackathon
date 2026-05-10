@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   AgentMessageResponse as AgentMessageResponseType,
   ApiError,
+  GetHistoryResponse,
   ConditionalOrderSnapshot,
   GetAllocationResponse,
   GetBalancesResponse,
@@ -26,6 +27,7 @@ import {
   UsdcSolQuoteResponseSchema,
   GetTransactionsResponseSchema,
   SSEProposalSchema,
+  GetHistoryResponseSchema,
 } from './schemas';
 
 // ============================================================================
@@ -124,6 +126,10 @@ export type ChatRequest =
       type: 'function_reject';
       session_id: string;
       reason?: string;
+    }
+  | {
+      type: 'get_history';
+      session_id: string;
     };
 
 export type SSEEvent =
@@ -353,6 +359,10 @@ export function postFunctionResult(
     },
     AgentMessageResponseSchema
   ) as Promise<AgentMessageResponseType>;
+}
+
+export function getHistory(sessionId: string): Promise<GetHistoryResponse> {
+  return postJson('/api/chat', { type: 'get_history', session_id: sessionId }, GetHistoryResponseSchema) as Promise<GetHistoryResponse>;
 }
 
 // ============================================================================

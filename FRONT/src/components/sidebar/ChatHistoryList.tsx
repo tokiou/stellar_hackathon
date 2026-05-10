@@ -2,28 +2,27 @@ import React, { useMemo } from 'react';
 import { ListMinus, Plus, Trash2 } from 'lucide-react';
 import { useWallet } from '@/hooks/useWallet';
 import { useChatStore } from '@/stores/chatStore';
+import type { PersistedConversation } from '@/types/chat';
 
 export function ChatHistoryList() {
   const wallet = useWallet();
-  const conversationsById = useChatStore((state) => state.conversationsById);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
-  const selectConversation = useChatStore((state) => state.selectConversation);
-  const deleteConversation = useChatStore((state) => state.deleteConversation);
+  const conversationOrder = useChatStore((state) => state.conversationOrder);
+  const conversationsById = useChatStore((state) => state.conversationsById);
   const clearHistory = useChatStore((state) => state.clearHistory);
   const startNewConversation = useChatStore((state) => state.startNewConversation);
-
-  const visibleConversations = useMemo(
-    () =>
-      Object.values(conversationsById).sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      ),
-    [conversationsById]
-  );
+  const selectConversation = useChatStore((state) => state.selectConversation);
+  const deleteConversation = useChatStore((state) => state.deleteConversation);
+  const conversations = useMemo(() => {
+    return conversationOrder
+      .map((id) => conversationsById[id])
+      .filter((conversation): conversation is PersistedConversation => Boolean(conversation));
+  }, [conversationOrder, conversationsById]);
 
   return (
     <div className="rounded-2xl border border-outline bg-surface p-3 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
-        <p className="text-sm font-semibold text-on-surface">Chat History</p>
+        <p className="text-sm font-semibold text-on-surface">Chat Session</p>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -31,12 +30,12 @@ export function ChatHistoryList() {
             className="rounded-lg border border-outline px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-hover"
             aria-label="Start new conversation"
           >
-            <span className="flex items-center gap-1"><Plus className="h-3 w-3" /> Nuevo</span>
+            <span className="flex items-center gap-1"><Plus className="h-3 w-3" /> Nueva</span>
           </button>
           <button
             type="button"
             onClick={clearHistory}
-            disabled={visibleConversations.length === 0}
+            disabled={!activeConversationId}
             className="rounded-lg border border-outline px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Clear chat history"
           >
@@ -44,27 +43,18 @@ export function ChatHistoryList() {
           </button>
         </div>
       </div>
-      {visibleConversations.length === 0 ? (
-        <p className="px-1 py-4 text-sm text-on-surface-variant">No tienes historial guardado.</p>
-      ) : null}
-      <div className="space-y-1">
-        {visibleConversations.map((conversation) => {
-          const isActive = conversation.id === activeConversationId;
-          return (
+      {conversations.length === 0 ? (
+        <p className="px-1 py-4 text-sm text-on-surface-variant">No hay conversaciones.</p>
+      ) : (
+        <div className="space-y-1">
+          {conversations.map((conversation) => (
             <div
               key={conversation.id}
-              className={`rounded-lg border px-2 py-2 ${
-                isActive ? 'border-primary bg-surface-hover' : 'border-outline/80 bg-surface'
-              }`}
+              className={`rounded-lg border px-2 py-2 ${conversation.id === activeConversationId ? 'border-primary/60' : 'border-outline/80'}`}
             >
-              <button
-                type="button"
-                onClick={() => selectConversation(conversation.id)}
-                className="w-full text-left"
-                aria-label={`Open conversation ${conversation.title}`}
-              >
+              <div className="space-y-1">
                 <p className="truncate text-sm font-semibold text-on-surface">{conversation.title}</p>
-                <p className="mt-1 text-xs text-on-surface-variant">
+                <p className="text-xs text-on-surface-variant">
                   {new Date(conversation.updatedAt).toLocaleString([], {
                     month: 'short',
                     day: '2-digit',
@@ -73,30 +63,40 @@ export function ChatHistoryList() {
                   })}
                 </p>
                 {conversation.sessionStatus === 'expired' ? (
-                  <p className="mt-1 text-xs font-medium text-warning">Sesión expirada</p>
+                  <p className="text-xs font-medium text-warning">Sesión expirada</p>
                 ) : null}
                 {conversation.walletStatus === 'mismatch' ? (
-                  <p className="mt-1 text-xs font-medium text-error-text">Wallet distinta</p>
+                  <p className="text-xs font-medium text-error-text">Wallet distinta</p>
                 ) : null}
                 {conversation.hasPendingProposal ? (
-                  <p className="mt-1 text-xs font-medium text-warning">Propuesta no reanudable</p>
+                  <p className="text-xs font-medium text-warning">Propuesta no reanudable</p>
                 ) : null}
-              </button>
-              <div className="mt-2 flex items-center justify-end border-t border-outline/70 pt-2">
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectConversation(conversation.id)}
+                  className="rounded-lg border border-outline px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-hover"
+                  aria-label={`Open conversation ${conversation.title}`}
+                >
+                  Open
+                </button>
                 <button
                   type="button"
                   onClick={() => deleteConversation(conversation.id)}
-                  className="flex items-center gap-1 rounded-md border border-outline px-2 py-1 text-xs text-on-surface-variant hover:bg-surface-hover"
+                  className="rounded-lg border border-outline px-2 py-1 text-xs font-medium text-on-surface-variant hover:bg-surface-hover"
                   aria-label={`Delete conversation ${conversation.title}`}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>Borrar</span>
+                  <span className="flex items-center gap-1">
+                    <Trash2 className="h-3 w-3" />
+                    Delete
+                  </span>
                 </button>
               </div>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

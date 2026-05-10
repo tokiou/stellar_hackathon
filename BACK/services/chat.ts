@@ -13,10 +13,17 @@ import {
   createSession,
   updateSession,
   clearPendingProposal,
+  appendSessionMessage,
+  appendSessionMessages,
+  type SessionHistoryMessage,
+  type SessionHistoryMessageInput,
   type SessionState,
   type PendingProposal,
   type ProposalState,
   type SolanaNetwork,
+  type SessionFunctionMessage,
+  type SessionTextMessage,
+  type SessionAlertMessage,
 } from './chatSessionStore';
 import {
   prepareTransferResult,
@@ -76,6 +83,10 @@ type ChatRequest =
       session_id?: string;
       user_address?: string;
       user_threshold_usd?: number;
+    }
+  | {
+      type: 'get_history';
+      session_id: string;
     }
   | {
       type: 'function_approve';
@@ -152,6 +163,31 @@ type AgentAlertMessage = {
 };
 
 type AgentMessage = AgentTextMessage | AgentFunctionCallMessage | AgentAlertMessage;
+
+type SessionHistoryOutputMessage =
+  | SessionTextMessage
+  | SessionFunctionMessage
+  | SessionAlertMessage
+  | {
+      role: 'agent';
+      type: 'text';
+      content: string;
+      execute?: {
+        status: 'submitted' | 'confirmed' | 'failed' | 'success';
+        tx_hash?: string;
+        error?: string;
+      };
+      timestamp: string;
+      id?: string;
+    };
+
+export type GetHistoryResponse = {
+  session_id: string;
+  user_address: string | null;
+  updated_at: string;
+  messages: SessionHistoryOutputMessage[];
+  pending_proposal: SessionFunctionMessage | null;
+};
 
 // ============================================================================
 // Tool Definition for Azure Responses API
@@ -308,6 +344,16 @@ export function isReadOnlyAgentTool(toolName: string): boolean {
   return (READ_ONLY_AGENT_TOOL_NAMES as readonly string[]).includes(toolName);
 }
 const DEFAULT_SOLANA_NETWORK: SolanaNetwork = 'devnet';
+const SYSTEM_INSTRUCTION =
+  'Eres un asistente de wallet para Solana llamado Compass. ' +
+  'Ayudas a los usuarios a realizar transferencias y compras condicionales de SOL de forma segura. ' +
+  'Cuando el usuario pida transferir SOL, usa la herramienta transfer. ' +
+  'En esta demo no prepares transferencias de otros tokens con la herramienta transfer. ' +
+  'Cuando el usuario pida comprar SOL solo si el precio está por debajo de X, usa la herramienta conditional_buy_sol. ' +
+  'Cuando el usuario pida conocer el saldo real de su wallet, usa get_wallet_holdings. ' +
+  'Cuando el usuario pida una cotizacion de conversion USDC/SOL, usa get_usdc_sol_quote. ' +
+  'IMPORTANTE: NUNCA digas que ejecutaste una transferencia on-chain. Solo puedes preparar la acción y pedir aprobación del usuario. ' +
+  'Responde en español de forma concisa y amigable.';
 const PROPOSAL_TTL_MS = 5 * 60 * 1000;
 const USDC_FUNDING_BUFFER_MULTIPLIER = 1.15;
 const MIN_USDC_FUNDING_SWAP_SOL = 0.05;
@@ -324,6 +370,21 @@ const SOL_TRANSFER_FEE_BUFFER_LAMPORTS = 50_000;
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function proposalMessageFromFunctionCall(
+  proposal: AgentFunctionCallMessage,
+): SessionFunctionMessage {
+  return {
+    id: `${proposal.function.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    role: 'agent',
+    type: 'function_call',
+    function: proposal.function,
+    display: proposal.display,
+    risk: proposal.risk,
+    execution: proposal.execution,
+    timestamp: proposal.timestamp,
+  };
 }
 
 function generateSessionId(): string {
@@ -376,6 +437,112 @@ async function writeSSE(
 
 function getProposalExpiry(): number {
   return Date.now() + PROPOSAL_TTL_MS;
+}
+
+function toHistoryPrompt(messages: SessionHistoryMessage[]): string {
+  return messages
+    .map((message) => {
+      if (message.type === 'text') {
+        const roleLabel =
+          message.role === 'user' ? 'Usuario' : message.role === 'system' ? 'Sistema' : 'Asistente';
+        if (message.execute) {
+          const status = ` [${message.execute.status}]`;
+          return `[${roleLabel}]: ${message.content}${status}`;
+        }
+        return `[${roleLabel}]: ${message.content}`;
+      }
+
+      if (message.type === 'function_call') {
+        const summary = message.display?.summary ?? 'Propuesta';
+        return `[Asistente]: propuesta ${summary} (${message.function.name})`;
+      }
+
+      return `[Sistema]: ${message.severity.toUpperCase()}: ${message.content}`;
+    })
+    .join('\n\n');
+}
+
+function addAgentTextToSession(
+  sessionId: string,
+  input: { content: string; execute?: SessionTextMessage['execute'] }
+) {
+  appendSessionMessage(sessionId, {
+    role: 'agent',
+    type: 'text',
+    content: input.content,
+    ...(input.execute ? { execute: input.execute } : {}),
+  });
+}
+
+function addAgentAlertToSession(
+  sessionId: string,
+  alert: Pick<SessionAlertMessage, 'severity' | 'content'>
+) {
+  appendSessionMessage(sessionId, {
+    role: 'agent',
+    type: 'alert',
+    severity: alert.severity,
+    content: alert.content,
+  });
+}
+
+function addSessionMessagesFromAgentMessages(
+  sessionId: string,
+  messages: AgentMessage[],
+) {
+  const historyEntries: SessionHistoryMessageInput[] = messages.map((message) => {
+    if (message.type === 'function_call') {
+      return {
+        role: 'agent',
+        type: 'function_call',
+        function: message.function,
+        display: message.display,
+        risk: message.risk,
+        execution: message.execution,
+      };
+    }
+
+    if (message.type === 'alert') {
+      return {
+        role: 'agent',
+        type: 'alert',
+        severity: message.severity,
+        content: message.content,
+      };
+    }
+
+    return {
+      role: 'agent',
+      type: 'text',
+      content: message.content,
+      execute: message.execute ? {
+        status: message.execute.status,
+        tx_hash: message.execute.tx_hash,
+        error: message.execute.error,
+      } : undefined,
+    };
+  });
+  appendSessionMessages(sessionId, historyEntries);
+}
+
+function buildProposalPayloadFromState(pendingProposal: PendingProposal): Omit<SessionFunctionMessage, 'id' | 'timestamp'> {
+  const toolName = pendingProposal.toolName as AgentFunctionCallMessage['function']['name'];
+  return {
+    role: 'agent',
+    type: 'function_call',
+    function: {
+      name: toolName,
+      params: pendingProposal.toolArgs,
+    },
+    display: {
+      summary: `Propuesta pendiente: ${pendingProposal.toolName}`,
+    },
+    risk: {
+      score: 50,
+      level: 'medium',
+      reasons: ['Propuesta recuperada desde sesión backend'],
+    },
+  };
 }
 
 function getRequiredUsdcForConditionalBuy(args: ConditionalBuySolParams): number {
@@ -918,6 +1085,8 @@ export async function proxyAgenticChat(body: unknown): Promise<Response> {
   switch (request.type) {
     case 'user_message':
       return handleUserMessage(request);
+    case 'get_history':
+      return handleGetHistory(request);
     case 'function_approve':
       return handleFunctionApprove(request);
     case 'function_result':
@@ -927,6 +1096,35 @@ export async function proxyAgenticChat(body: unknown): Promise<Response> {
     default:
       return jsonResponse({ error: { code: 'invalid_type', message: 'Unknown request type' } }, { status: 400 });
   }
+}
+
+async function handleGetHistory(request: {
+  type: 'get_history';
+  session_id: string;
+}): Promise<Response> {
+  const session = getSession(request.session_id);
+  if (!session) {
+    return jsonResponse({ error: { code: 'session_not_found', message: 'Session not found or expired' } }, { status: 404 });
+  }
+
+  const pendingProposalMessage = session.pendingProposal
+    ? session.pendingProposal.proposalMessage ??
+      {
+        ...buildProposalPayloadFromState(session.pendingProposal),
+        id: `${session.pendingProposal.toolName}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: now(),
+      }
+    : null;
+
+  const response: GetHistoryResponse = {
+    session_id: session.sessionId,
+    user_address: session.userAddress,
+    updated_at: new Date(session.updatedAt).toISOString(),
+    messages: [...session.messages],
+    pending_proposal: pendingProposalMessage,
+  };
+
+  return jsonResponse(response, { status: 200 });
 }
 
 // ============================================================================
@@ -968,19 +1166,31 @@ async function handleUserMessage(request: {
       console.log(`[chat] User message: ${sessionId} - ${request.content.slice(0, 50)}...`);
 
       // Build conversation
-      const systemInstruction =
-        'Eres un asistente de wallet para Solana llamado Compass. ' +
-        'Ayudas a los usuarios a realizar transferencias y compras condicionales de SOL de forma segura. ' +
-        'Cuando el usuario pida transferir SOL, usa la herramienta transfer. ' +
-        'En esta demo no prepares transferencias de otros tokens con la herramienta transfer. ' +
-        'Cuando el usuario pida comprar SOL solo si el precio está por debajo de X, usa la herramienta conditional_buy_sol. ' +
-        'Cuando el usuario pida conocer el saldo real de su wallet, usa get_wallet_holdings. ' +
-        'Cuando el usuario pida una cotizacion de conversion USDC/SOL, usa get_usdc_sol_quote. ' +
-        'IMPORTANTE: NUNCA digas que ejecutaste una transferencia on-chain. Solo puedes preparar la acción y pedir aprobación del usuario. ' +
-        'Responde en español de forma concisa y amigable.';
+      const systemInstruction = SYSTEM_INSTRUCTION;
+
+      const persistedSession = appendSessionMessage(sessionId, {
+        role: 'user',
+        type: 'text',
+        content: request.content,
+      });
+
+      if (!persistedSession) {
+        await writeSSE(writer, encoder, 'error', {
+          code: 'session_error',
+          message: 'Unable to persist user message',
+        });
+        await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+        await writer.close();
+        return;
+      }
 
       const maskedUserInput = maskSolanaAddressesForModel(request.content);
-      const conversationInput = `[Usuario]: ${maskedUserInput.content}`;
+      const promptMessages = persistedSession.messages.map((message, index, messages) => {
+        const isLatestUserMessage =
+          index === messages.length - 1 && message.role === 'user' && message.type === 'text';
+        return isLatestUserMessage ? { ...message, content: maskedUserInput.content } : message;
+      });
+      const conversationInput = toHistoryPrompt(promptMessages);
       const directTransferIntent = parseDirectTransferIntent(request.content);
       if (directTransferIntent.matched) {
         if (!directTransferIntent.recipientValid) {
@@ -1006,9 +1216,7 @@ async function handleUserMessage(request: {
           session.userAddress,
           session,
           writer,
-          encoder,
-          conversationInput,
-          systemInstruction
+          encoder
         );
         return;
       }
@@ -1047,8 +1255,6 @@ async function handleUserMessage(request: {
             session,
             writer,
             encoder,
-            conversationInput,
-            systemInstruction
           );
         } else if (toolCall.name === 'conditional_buy_sol') {
           await handleConditionalBuyToolCall(
@@ -1098,7 +1304,9 @@ async function handleUserMessage(request: {
             sessionId,
             session,
             writer,
-            encoder
+            encoder,
+            conversationInput,
+            systemInstruction
           );
         }
         return;
@@ -1112,7 +1320,12 @@ async function handleUserMessage(request: {
         maxOutputTokens: 4096,
       });
 
-      await streamResponseToSSE(responseStream, writer, encoder);
+      const assistantText = await streamResponseToSSE(responseStream, writer, encoder);
+      if (assistantText) {
+        addAgentTextToSession(sessionId, {
+          content: assistantText,
+        });
+      }
       await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     } catch (err) {
       console.error('[chat] Stream error:', err);
@@ -1141,7 +1354,9 @@ async function handleOrcaSwapToolCall(
   sessionId: string,
   session: SessionState,
   writer: WritableStreamDefaultWriter<Uint8Array>,
-  encoder: TextEncoder
+  encoder: TextEncoder,
+  conversationInput: string,
+  systemInstruction: string
 ) {
   let toolArgs: OrcaSwapParams;
   try {
@@ -1165,6 +1380,28 @@ async function handleOrcaSwapToolCall(
   try {
     const quote = await quoteOrcaUsdcToSol(toolArgs);
 
+    const proposalMessage: AgentFunctionCallMessage = {
+      type: 'function_call',
+      function: { name: 'swap_orca_usdc_to_sol', params: toolArgs },
+      display: {
+        summary: `Swap Orca: ${toolArgs.input_amount} ${displaySwapToken(toolArgs.input_token)} -> ${displaySwapToken(toolArgs.output_token)}`,
+        provider: 'orca_whirlpools_devnet',
+      },
+      risk: {
+        score: 35,
+        level: 'medium',
+        reasons: ['Ejecución real de swap en Orca devnet', `Slippage ${quote.slippage_bps} bps`],
+      },
+      execution: {
+        mode: 'phantom_sign_and_send',
+        network: DEFAULT_SOLANA_NETWORK,
+        expires_at: new Date(getProposalExpiry()).toISOString(),
+        expected_user_address: session.userAddress ?? undefined,
+      },
+      timestamp: now(),
+    };
+
+    const persistedProposalMessage = proposalMessageFromFunctionCall(proposalMessage);
     updateSession(sessionId, {
       pendingProposal: {
         proposalType: 'swap_orca_usdc_to_sol',
@@ -1176,8 +1413,10 @@ async function handleOrcaSwapToolCall(
         expiresAt: getProposalExpiry(),
         expectedUserAddress: session.userAddress,
         network: DEFAULT_SOLANA_NETWORK,
+        proposalMessage: persistedProposalMessage,
       },
     });
+    appendSessionMessage(sessionId, persistedProposalMessage);
 
     const proposal: AgentFunctionCallMessage = {
       type: 'function_call',
@@ -1245,8 +1484,12 @@ async function handleGetWalletHoldingsToolCall(
       address: rawAddress,
       network: network ?? 'devnet',
     });
+    const content = JSON.stringify(holdings);
 
-    await writeSSE(writer, encoder, 'token', { content: JSON.stringify(holdings) });
+    await writeSSE(writer, encoder, 'token', { content });
+    addAgentTextToSession(sessionId, {
+      content: `Resultado de consulta de balances: ${content}`,
+    });
     await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     await writer.close();
   } catch (error) {
@@ -1317,8 +1560,12 @@ async function handleGetUsdcSolQuoteToolCall(
       ...(typeof args.slippage_bps === 'number' ? { slippage_bps: args.slippage_bps } : {}),
       network: args.network ?? 'devnet',
     });
+    const content = JSON.stringify(quote);
 
-    await writeSSE(writer, encoder, 'token', { content: JSON.stringify(quote) });
+    await writeSSE(writer, encoder, 'token', { content });
+    addAgentTextToSession(sessionId, {
+      content: `Cotización: ${content}`,
+    });
     await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     await writer.close();
   } catch (error) {
@@ -1447,27 +1694,6 @@ async function handleConditionalBuyToolCall(
         const fundingSwap = await buildUsdcFundingSwap(missingUsdc, toolArgs.target_price_usd);
         const swapArgs = fundingSwap.args;
 
-        updateSession(sessionId, {
-          pendingProposal: {
-            proposalType: 'swap_orca_usdc_to_sol',
-            state: 'awaiting_approval',
-            toolName: 'swap_orca_usdc_to_sol',
-            toolArgs: { ...swapArgs, quote: fundingSwap.quote },
-            toolResult: {
-              status: 'prepared',
-              reason: 'DEV_USDC_REQUIRED_BEFORE_CONDITIONAL_ORDER',
-              next_conditional_buy_args: {
-                ...toolArgs,
-                ...proposalPayload,
-              },
-            },
-            createdAt: Date.now(),
-            expiresAt: getProposalExpiry(),
-            expectedUserAddress: session.userAddress,
-            network: DEFAULT_SOLANA_NETWORK,
-          },
-        });
-
         const proposal: AgentFunctionCallMessage = {
           type: 'function_call',
           function: { name: 'swap_orca_usdc_to_sol', params: swapArgs },
@@ -1491,6 +1717,35 @@ async function handleConditionalBuyToolCall(
           },
           timestamp: now(),
         };
+        const sessionProposalMessage = proposalMessageFromFunctionCall(proposal);
+
+        updateSession(sessionId, {
+          pendingProposal: {
+            proposalType: 'swap_orca_usdc_to_sol',
+            state: 'awaiting_approval',
+            toolName: 'swap_orca_usdc_to_sol',
+            toolArgs: { ...swapArgs, quote: fundingSwap.quote },
+            toolResult: {
+              status: 'prepared',
+              reason: 'DEV_USDC_REQUIRED_BEFORE_CONDITIONAL_ORDER',
+              next_conditional_buy_args: {
+                ...toolArgs,
+                ...proposalPayload,
+              },
+            },
+            createdAt: Date.now(),
+            expiresAt: getProposalExpiry(),
+            expectedUserAddress: session.userAddress,
+            network: DEFAULT_SOLANA_NETWORK,
+            proposalMessage: sessionProposalMessage,
+          },
+        });
+        appendSessionMessage(sessionId, sessionProposalMessage);
+        addAgentAlertToSession(sessionId, {
+          severity: 'info',
+          content:
+            `Para crear la orden condicional primero necesitás devUSDC en la wallet. Preparé un swap Orca SOL -> devUSDC; cuando se confirme voy a dejar lista la propuesta condicional.`,
+        });
 
         await writeSSE(writer, encoder, 'alert', {
           severity: 'info',
@@ -1508,6 +1763,12 @@ async function handleConditionalBuyToolCall(
         await writer.close();
         return;
       } catch (e) {
+        addAgentAlertToSession(sessionId, {
+          severity: 'warning',
+          content:
+            `Tu wallet no tiene suficiente devUSDC para esta orden. ` +
+            `Hacé primero un swap SOL -> devUSDC en Orca devnet y luego repetí la orden condicional.`,
+        });
         await writeSSE(writer, encoder, 'alert', {
           severity: 'warning',
           content:
@@ -1553,6 +1814,7 @@ async function handleConditionalBuyToolCall(
     },
     timestamp: now(),
   };
+  const sessionProposalMessage = proposalMessageFromFunctionCall(proposal);
 
   updateSession(sessionId, {
     pendingProposal: {
@@ -1571,8 +1833,10 @@ async function handleConditionalBuyToolCall(
       expiresAt: getProposalExpiry(),
       expectedUserAddress: session.userAddress,
       network: DEFAULT_SOLANA_NETWORK,
+      proposalMessage: sessionProposalMessage,
     },
   });
+  appendSessionMessage(sessionId, sessionProposalMessage);
 
   await writeSSE(writer, encoder, 'proposal', proposal);
   await writeSSE(writer, encoder, 'done', {
@@ -1590,9 +1854,7 @@ async function handleTransferToolCall(
   userAddress: string | null,
   session: SessionState,
   writer: WritableStreamDefaultWriter<Uint8Array>,
-  encoder: TextEncoder,
-  conversationInput: string,
-  systemInstruction: string
+  encoder: TextEncoder
 ) {
   const existingPendingProposal = session.pendingProposal;
   if (existingPendingProposal && isProposalBlocking(existingPendingProposal) && !isProposalExpired(existingPendingProposal)) {
@@ -1653,17 +1915,24 @@ async function handleTransferToolCall(
       return;
     }
 
+    const latestSession = getSession(sessionId);
+    const currentConversationInput = toHistoryPrompt(latestSession?.messages ?? []);
     const denialInput =
-      conversationInput +
+      currentConversationInput +
       `\n\n[Resultado de herramienta transfer]: La transferencia fue rechazada. Razón: ${toolResult.reason}`;
 
     const denialStream = await callAzureResponsesStream({
       input: denialInput,
-      instructions: systemInstruction,
+        instructions: SYSTEM_INSTRUCTION,
       maxOutputTokens: 1024,
     });
 
-    await streamResponseToSSE(denialStream, writer, encoder);
+    const denialText = await streamResponseToSSE(denialStream, writer, encoder);
+    if (denialText) {
+      addAgentTextToSession(sessionId, {
+        content: denialText,
+      });
+    }
     await writeSSE(writer, encoder, 'done', { session_id: sessionId });
     await writer.close();
     return;
@@ -1728,9 +1997,11 @@ async function handleTransferToolCall(
     const rejectionMessage =
       `La transferencia fue bloqueada por reglas de seguridad: ${riskReasons.join(' | ')}` +
       '\n\nSi quieres, corrige los datos e intenta nuevamente.';
+    const latestSession = getSession(sessionId);
+    const currentConversationInput = toHistoryPrompt(latestSession?.messages ?? []);
     const denialStream = await callAzureResponsesStream({
-      input: conversationInput + `\n\n[Resultado de guardrail]: ${rejectionMessage}`,
-      instructions: systemInstruction,
+      input: currentConversationInput + `\n\n[Resultado de guardrail]: ${rejectionMessage}`,
+      instructions: SYSTEM_INSTRUCTION,
       maxOutputTokens: 1024,
     });
 
@@ -1872,11 +2143,28 @@ async function streamResponseToSSE(
   responseStream: ReadableStream<Uint8Array>,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   encoder: TextEncoder
-) {
+): Promise<string> {
   let streamedText = false;
+  let accumulatedText = '';
+  const extractTextParts = (parts: Array<{ type?: string; text?: string }> | undefined): string => {
+    if (!Array.isArray(parts)) return '';
+    return parts
+      .map((part) => part.text || '')
+      .filter(Boolean)
+      .join('');
+  };
+  const extractDoneText = (event: Record<string, unknown>): string => {
+    if (typeof event.text === 'string') return event.text;
+    if (typeof event.delta === 'string') return event.delta;
+    const part = event.part as { text?: string } | undefined;
+    if (part?.text) return part.text;
+    const item = event.item as { content?: Array<{ type?: string; text?: string }> } | undefined;
+    return extractTextParts(item?.content);
+  };
   const writeToken = async (content: string) => {
     if (!content) return;
     streamedText = true;
+    accumulatedText += content;
     await writeSSE(writer, encoder, 'token', { content });
   };
 
@@ -1892,27 +2180,27 @@ async function streamResponseToSSE(
         }
       }
     } else if (
-      (event.type === 'response.output_text.done' ||
-        event.type === 'response.content_part.done' ||
-        event.type === 'response.output_item.done') &&
-      streamedText
+      event.type === 'response.output_text.done' ||
+      event.type === 'response.content_part.done' ||
+      event.type === 'response.output_item.done'
     ) {
-      return;
+      if (!streamedText) {
+        await writeToken(extractDoneText(event));
+      }
+      return accumulatedText.trim();
     } else if (event.type === 'response.completed' && !streamedText) {
       const output = event.response?.output;
       if (Array.isArray(output)) {
         for (const item of output) {
           if (item.type === 'message' && item.content) {
-            for (const part of item.content) {
-              if (part.type === 'output_text') {
-                await writeToken(part.text || '');
-              }
-            }
+            await writeToken(extractTextParts(item.content));
           }
         }
       }
     }
   }
+
+  return accumulatedText.trim();
 }
 
 // ============================================================================
@@ -2113,6 +2401,7 @@ async function handleFunctionApprove(request: {
         },
       },
     });
+    addSessionMessagesFromAgentMessages(request.session_id, response.messages);
     return jsonResponse(response, { status: 200 });
   }
 
@@ -2361,6 +2650,7 @@ async function handleFunctionApprove(request: {
         },
       },
     });
+    addSessionMessagesFromAgentMessages(request.session_id, response.messages);
 
     return jsonResponse(response, { status: 200 });
   }
@@ -2531,16 +2821,17 @@ async function handleFunctionApprove(request: {
   };
 
   updateSession(request.session_id, {
-    pendingProposal: {
-      ...proposal,
-      state: 'awaiting_signature',
-      recentBlockhash: unsignedTx.blockhash,
-      lastValidBlockHeight: unsignedTx.lastValidBlockHeight,
-    },
-  });
+      pendingProposal: {
+        ...proposal,
+        state: 'awaiting_signature',
+        recentBlockhash: unsignedTx.blockhash,
+        lastValidBlockHeight: unsignedTx.lastValidBlockHeight,
+      },
+    });
+  addSessionMessagesFromAgentMessages(request.session_id, response.messages);
 
-  return jsonResponse(responseData, { status: 200 });
-}
+    return jsonResponse(responseData, { status: 200 });
+  }
 
 // ============================================================================
 // Function Result Handler (JSON)
@@ -2568,6 +2859,21 @@ async function handleFunctionResult(request: {
 
   const pendingProposal = session.pendingProposal;
   if (pendingProposal.toolName === 'conditional_buy_sol' && request.status === 'confirmed' && request.error_message) {
+    clearPendingProposal(request.session_id);
+    const declineResponse: { messages: AgentMessage[] } = {
+      messages: [
+        {
+          type: 'text',
+          content: request.error_message,
+          execute: {
+            status: 'failed',
+            error: request.error_message,
+          },
+          timestamp: now(),
+        },
+      ],
+    };
+    addSessionMessagesFromAgentMessages(request.session_id, declineResponse.messages);
     return jsonResponse(
       {
         error: {
@@ -2594,8 +2900,7 @@ async function handleFunctionResult(request: {
       });
 
       if (decision.decision === 'REJECT') {
-        clearPendingProposal(request.session_id);
-        return jsonResponse({
+        const rejectionResponse: { messages: AgentMessage[] } = {
           messages: [
             {
               type: 'text',
@@ -2604,7 +2909,10 @@ async function handleFunctionResult(request: {
               timestamp: now(),
             },
           ],
-        });
+        };
+        clearPendingProposal(request.session_id);
+        addSessionMessagesFromAgentMessages(request.session_id, rejectionResponse.messages);
+        return jsonResponse(rejectionResponse);
       }
 
       const conditionalToolArgs = {
@@ -2657,7 +2965,7 @@ async function handleFunctionResult(request: {
         },
       });
 
-      return jsonResponse({
+      const response: { messages: AgentMessage[] } = {
         messages: [
           {
             type: 'text',
@@ -2667,7 +2975,9 @@ async function handleFunctionResult(request: {
           },
           proposal,
         ],
-      });
+      };
+      addSessionMessagesFromAgentMessages(request.session_id, response.messages);
+      return jsonResponse(response);
     }
   }
 
@@ -2701,6 +3011,7 @@ async function handleFunctionResult(request: {
       },
     ],
   };
+  addSessionMessagesFromAgentMessages(request.session_id, response.messages);
 
   return jsonResponse(response, { status: 200 });
 }
@@ -2740,6 +3051,7 @@ async function handleFunctionReject(request: {
       },
     ],
   };
+  addSessionMessagesFromAgentMessages(request.session_id, response.messages);
 
   return jsonResponse(response, { status: 200 });
 }

@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { AgentMessage, ExecuteInfo } from '@/types/api';
+import type {
+  AgentMessage,
+  ExecuteInfo,
+  SessionHistoryFunctionCallMessage,
+  SessionHistoryMessage,
+} from '@/types/api';
 import type {
   AgentChatMessage,
   ChatMessage,
@@ -103,6 +108,54 @@ function deriveConversationTitle(messages: ChatMessage[]): string {
   return 'Nueva conversación';
 }
 
+function toHydratedChatMessage(historyMessage: SessionHistoryMessage): ChatMessage {
+  if (historyMessage.role === 'user') {
+    return {
+      id: historyMessage.id ? historyMessage.id : toId('user'),
+      role: 'user',
+      type: 'text',
+      content: historyMessage.content,
+      timestamp: safeIsoDate(historyMessage.timestamp),
+    };
+  }
+
+  if (historyMessage.type === 'alert') {
+    return {
+      id: historyMessage.id ? historyMessage.id : toId('agent'),
+      role: 'agent',
+      type: 'alert',
+      severity: historyMessage.severity,
+      content: historyMessage.content,
+      timestamp: safeIsoDate(historyMessage.timestamp),
+    };
+  }
+
+  if (historyMessage.type === 'function_call') {
+    const historyFunctionCall = historyMessage as SessionHistoryFunctionCallMessage;
+    return {
+      ...historyFunctionCall,
+      id: historyMessage.id ? historyMessage.id : toId('agent'),
+      role: 'agent',
+      type: 'function_call',
+    };
+  }
+
+  return {
+    id: historyMessage.id ? historyMessage.id : toId('agent'),
+    role: 'agent',
+    type: 'text',
+    content: historyMessage.content,
+    execute: historyMessage.execute,
+    timestamp: safeIsoDate(historyMessage.timestamp),
+  };
+}
+
+function toHydratedMessages(historyMessages: SessionHistoryMessage[]): ChatMessage[] {
+  return historyMessages
+    .map((historyMessage) => toHydratedChatMessage(historyMessage))
+    .sort((a, b) => toIso(a.timestamp) - toIso(b.timestamp));
+}
+
 function syncConversationMetadata(
   conversation: PersistedConversation,
   currentWalletAddress: string | null,
@@ -197,6 +250,12 @@ type ChatStore = {
 
   // Session actions
   setSessionId: (sessionId: string) => void;
+  hydrateSessionHistory: (
+    sessionId: string,
+    messages: SessionHistoryMessage[],
+    pendingProposal: SessionHistoryFunctionCallMessage | null,
+  ) => void;
+  clearSessionData: () => void;
 
   // Message actions
   addUserMessage: (content: string) => void;
@@ -732,6 +791,84 @@ export const useChatStore = create<ChatStore>()(
             };
           });
         },
+        hydrateSessionHistory: (sessionId, historyMessages, pendingProposalMessage) => {
+          set((state) => {
+            const activeConversationId = state.activeConversationId;
+            if (!activeConversationId) return {};
+            const conversation = state.conversationsById[activeConversationId];
+            if (!conversation) return {};
+            const now = isoNow();
+            const hydratedMessages = toHydratedMessages(historyMessages);
+            const pendingProposal = pendingProposalMessage
+              ? ({
+                  ...pendingProposalMessage,
+                  role: 'agent',
+                  id: pendingProposalMessage.id ? pendingProposalMessage.id : toId('agent'),
+                  uiState: 'pending',
+                } as PendingProposal)
+              : null;
+            const touchedConversation: PersistedConversation = {
+              ...conversation,
+              sessionId,
+              messages: hydratedMessages,
+              title: deriveConversationTitle(hydratedMessages),
+              updatedAt: now,
+              hasPendingProposal: Boolean(pendingProposal),
+              pendingProposalPreview: pendingProposal
+                ? {
+                  toolName: pendingProposal.function?.name,
+                  createdAt: pendingProposal.timestamp,
+                }
+                : null,
+              sessionStatus: pendingProposal ? 'active' : 'active',
+              walletStatus: toWalletStatus(conversation, state.activeWalletAddress),
+            };
+            return {
+              sessionId,
+              messages: hydratedMessages,
+              pendingProposal,
+              proposalUiState: pendingProposal ? 'pending' : null,
+              status: pendingProposal ? 'awaiting_approval' : 'idle',
+              streamingContent: '',
+              conversationsById: {
+                ...state.conversationsById,
+                [activeConversationId]: syncConversationMetadata(touchedConversation, state.activeWalletAddress),
+              },
+            };
+          });
+        },
+        clearSessionData: () => {
+          set((state) => {
+            if (!state.activeConversationId) return {};
+            const activeConversation = state.conversationsById[state.activeConversationId];
+            if (!activeConversation) return {};
+            const now = isoNow();
+            const refreshedConversation: PersistedConversation = {
+              ...activeConversation,
+              sessionId: null,
+              messages: [makeWelcomeMessage()],
+              title: 'Nueva conversación',
+              updatedAt: now,
+              hasPendingProposal: false,
+              pendingProposalPreview: null,
+            };
+            return {
+              sessionId: null,
+              messages: refreshedConversation.messages,
+              pendingProposal: null,
+              proposalUiState: null,
+              status: 'idle',
+              streamingContent: '',
+              conversationsById: {
+                ...state.conversationsById,
+                [state.activeConversationId]: syncConversationMetadata(
+                  refreshedConversation,
+                  state.activeWalletAddress
+                ),
+              },
+            };
+          });
+        },
 
         // Message actions
         addUserMessage: (content) => {
@@ -1061,20 +1198,10 @@ export const useChatStore = create<ChatStore>()(
       storage: createJSONStorage(getSafeChatStorage),
       migrate: (persistedState) => sanitizeIncomingState(persistedState),
       partialize: (state) => {
-        const conversationsById = Object.fromEntries(
-          Object.entries(state.conversationsById).map(([id, conversation]) => [
-            id,
-            syncConversationMetadata(conversation, state.activeWalletAddress),
-          ])
-        );
         return {
           schemaVersion: CHAT_STORE_SCHEMA_VERSION,
-          activeConversationId: state.activeConversationId,
           activeWalletAddress: state.activeWalletAddress,
           sessionId: state.sessionId,
-          messages: state.messages,
-          conversationsById,
-          conversationOrder: state.conversationOrder,
         };
       },
     }

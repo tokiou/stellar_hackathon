@@ -48,3 +48,4 @@ pnpm-debug.log*
 **/target/
 **/.anchor/
 **/test-ledger/
+.vercel

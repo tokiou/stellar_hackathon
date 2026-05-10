@@ -161,6 +161,48 @@ export type AgentMessage =
       timestamp: string;
     };
 
+export type SessionHistoryTextMessage = {
+  id?: string;
+  role: 'user' | 'agent' | 'system';
+  type: 'text';
+  content: string;
+  execute?: ExecuteInfo;
+  timestamp: string;
+};
+
+export type SessionHistoryFunctionCallMessage = {
+  id?: string;
+  role: 'agent';
+  type: 'function_call';
+  function: {
+    name: 'swap' | 'transfer' | 'stake' | 'conditional_buy_sol' | 'swap_orca_usdc_to_sol';
+    params: SwapParams | TransferParams | StakeParams | ConditionalBuySolParams | OrcaSwapParams;
+  };
+  display: {
+    summary: string;
+    fee_usd?: number;
+    provider?: string;
+    slippage_bps?: number;
+  };
+  risk: RiskInfo;
+  execution?: FunctionExecution;
+  timestamp: string;
+};
+
+export type SessionHistoryAlertMessage = {
+  id?: string;
+  role: 'agent';
+  type: 'alert';
+  severity: 'info' | 'warning' | 'danger';
+  content: string;
+  timestamp: string;
+};
+
+export type SessionHistoryMessage =
+  | SessionHistoryTextMessage
+  | SessionHistoryFunctionCallMessage
+  | SessionHistoryAlertMessage;
+
 export type AgentMessageRequest =
   | { type: 'user_message'; content: string; session_id?: string; user_address?: string; user_threshold_usd?: number }
   | { type: 'function_approve'; session_id: string }
@@ -181,6 +223,14 @@ export type AgentMessageResponse = {
     network: 'devnet' | 'mainnet-beta';
     onchain_guardrail?: OnchainGuardrail;
   };
+};
+
+export type GetHistoryResponse = {
+  session_id: string;
+  user_address: string | null;
+  updated_at: string;
+  messages: SessionHistoryMessage[];
+  pending_proposal: SessionHistoryFunctionCallMessage | null;
 };
 
 export type GetBalancesQuery = {

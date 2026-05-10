@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ApiErrorSchema,
   AgentMessageResponseSchema,
   GetBalancesResponseSchema,
+  GetHistoryResponseSchema,
   FunctionApproveResponseSchema,
   FunctionExecutionSchema,
   ConditionalBuySolParamsSchema,
@@ -134,6 +136,86 @@ describe('api schemas', () => {
 
     expect(parsed.change_24h_pct).toBeUndefined();
     expect(parsed.balances[0].ui_amount).toBe(7.49984);
+  });
+
+  it('validates session history payload with pending proposal', () => {
+    const now = new Date().toISOString();
+    const parsed = GetHistoryResponseSchema.parse({
+      session_id: 'session-1',
+      user_address: 'wallet-1',
+      updated_at: now,
+      messages: [
+        {
+          role: 'user',
+          type: 'text',
+          content: 'Quiero transferir',
+          timestamp: now,
+        },
+        {
+          role: 'agent',
+          type: 'text',
+          content: 'Preparo eso.',
+          timestamp: now,
+        },
+        {
+          role: 'agent',
+          type: 'function_call',
+          function: {
+            name: 'transfer',
+            params: {
+              amount: 1,
+              token: 'SOL',
+              recipient: '11111111111111111111111111111111',
+            },
+          },
+          display: {
+            summary: 'Transfer 1 SOL',
+            fee_usd: 0,
+          },
+          risk: {
+            score: 10,
+            level: 'low',
+          },
+          timestamp: now,
+        },
+      ],
+      pending_proposal: {
+        role: 'agent',
+        type: 'function_call',
+        function: {
+          name: 'transfer',
+          params: {
+            amount: 1,
+            token: 'SOL',
+            recipient: '11111111111111111111111111111111',
+          },
+        },
+        display: {
+          summary: 'Transfer 1 SOL',
+          fee_usd: 0,
+        },
+        risk: {
+          score: 10,
+          level: 'low',
+        },
+        timestamp: now,
+      },
+    });
+
+    expect(parsed.session_id).toBe('session-1');
+    expect(parsed.pending_proposal?.type).toBe('function_call');
+    expect(parsed.messages).toHaveLength(3);
+  });
+
+  it('validates session_not_found API error payload', () => {
+    const parsed = ApiErrorSchema.parse({
+      error: {
+        code: 'session_not_found',
+        message: 'Session not found or expired',
+      },
+    });
+
+    expect(parsed.error.code).toBe('session_not_found');
   });
 
   it('validates partial wallet balances with warnings', () => {

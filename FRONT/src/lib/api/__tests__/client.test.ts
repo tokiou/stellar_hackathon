@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamChat } from '../client';
+import { ApiClientError, getHistory, streamChat } from '../client';
 import { getUsdcSolQuote } from '../client';
 
 function sseResponseFromChunks(chunks: string[]) {
@@ -84,5 +84,61 @@ describe('streamChat', () => {
       '/api/quotes/usdc-sol?input_token=USDC&output_token=SOL&input_amount=10&slippage_bps=100&network=devnet',
       expect.anything(),
     );
+  });
+});
+
+describe('chat session history endpoint', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches and parses get_history payload', async () => {
+    const now = new Date().toISOString();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          session_id: 'session-1',
+          user_address: 'wallet-1',
+          updated_at: now,
+          messages: [
+            {
+              role: 'agent',
+              type: 'text',
+              content: 'Hola',
+              timestamp: now,
+            },
+          ],
+          pending_proposal: null,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    const payload = await getHistory('session-1');
+
+    expect(payload.session_id).toBe('session-1');
+    expect(payload.messages).toHaveLength(1);
+    expect(payload.messages[0].type).toBe('text');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/chat',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('throws ApiClientError for session_not_found', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'session_not_found',
+            message: 'session expired',
+          },
+        }),
+        { status: 404, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    const error = await getHistory('expired').catch((e) => e);
+    expect((error as ApiClientError).code).toBe('session_not_found');
   });
 });

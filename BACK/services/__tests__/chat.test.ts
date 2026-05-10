@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getAgentToolNames,
@@ -7,9 +7,58 @@ import {
   maskSolanaAddressesForModel,
   normalizeMessages,
   parseDirectTransferIntent,
+  proxyAgenticChat,
   restoreMaskedSolanaAddressesInToolArgs,
 } from '../chat';
 import { prepareTransferResult } from '../tools/transfer';
+import { createSession, getSession } from '../chatSessionStore';
+import * as azureResponsesClient from '../azureResponsesClient';
+
+function makeCompletionStream(content: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const payload = JSON.stringify({
+    type: 'response.completed',
+    response: {
+      output: [
+        {
+          type: 'message',
+          content: [
+            {
+              type: 'output_text',
+              text: content,
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  const rawChunk = `data: ${payload}\n\n`;
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(rawChunk));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+}
+
+function makeTerminalDoneStream(content: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const payload = JSON.stringify({
+    type: 'response.output_text.done',
+    text: content,
+  });
+
+  const rawChunk = `data: ${payload}\n\n`;
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(rawChunk));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+}
 
 describe('chat agent tool catalog', () => {
   it('includes backend managed read-only context tools', () => {
@@ -18,6 +67,185 @@ describe('chat agent tool catalog', () => {
     expect(isReadOnlyAgentTool('get_wallet_holdings')).toBe(true);
     expect(isReadOnlyAgentTool('get_usdc_sol_quote')).toBe(true);
     expect(isReadOnlyAgentTool('transfer')).toBe(false);
+  });
+});
+
+describe('chat history endpoint', () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'test-key';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns session_not_found for unknown session', async () => {
+    const response = await proxyAgenticChat({
+      type: 'get_history',
+      session_id: 'session-missing',
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('session_not_found');
+  });
+
+  it('returns persisted messages and pending proposal in history', async () => {
+    const sessionId = 'session-history-1';
+    const session = createSession(sessionId, 'thread-history-1', 'wallet-1');
+    const proposalMessage = {
+      id: 'pending-msg-1',
+      role: 'agent' as const,
+      type: 'function_call' as const,
+      function: {
+        name: 'transfer' as const,
+        params: {
+          amount: 1,
+          token: 'SOL',
+          recipient: '11111111111111111111111111111111',
+        },
+      },
+      display: {
+        summary: 'Prepare transfer',
+      },
+      risk: {
+        score: 10,
+        level: 'low' as const,
+      },
+      execution: {
+        mode: 'phantom_sign_and_send' as const,
+        network: 'devnet' as const,
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      timestamp: new Date().toISOString(),
+    };
+    session.messages = [proposalMessage];
+    session.pendingProposal = {
+      toolName: 'transfer',
+      toolArgs: {
+        amount: 1,
+        token: 'SOL',
+        recipient: '11111111111111111111111111111111',
+      },
+      toolResult: {
+        status: 'prepared',
+        reason: 'pending',
+      },
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      expectedUserAddress: 'wallet-1',
+      state: 'awaiting_approval',
+      proposalType: 'transfer',
+      network: 'devnet',
+      proposalMessage,
+    };
+
+    const response = await proxyAgenticChat({
+      type: 'get_history',
+      session_id: sessionId,
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+
+    expect(payload.session_id).toBe(sessionId);
+    expect(payload.pending_proposal).not.toBeNull();
+    expect(payload.messages).toHaveLength(1);
+    expect(payload.messages[0]).toMatchObject({
+      role: 'agent',
+      type: 'function_call',
+      function: {
+        name: 'transfer',
+      },
+    });
+  });
+
+  it('includes previous transcript when building model input for user message', async () => {
+    const sessionId = 'session-history-2';
+    const session = createSession(sessionId, 'thread-history-2', 'wallet-1');
+    session.messages.push({
+      id: 'seed-1',
+      role: 'user',
+      type: 'text',
+      content: '¿Cómo estás?',
+      timestamp: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    const completionSpy = vi.spyOn(azureResponsesClient, 'callAzureResponses').mockResolvedValueOnce({
+      id: 'r1',
+      object: 'response',
+      status: 'completed',
+      output: [],
+    });
+    vi.spyOn(azureResponsesClient, 'callAzureResponsesStream').mockResolvedValueOnce(
+      makeCompletionStream('Te ayudo con eso'),
+    );
+
+    const response = await proxyAgenticChat({
+      type: 'user_message',
+      content: 'Y para hoy qué me recomiendas?',
+      session_id: sessionId,
+      user_address: 'wallet-1',
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(completionSpy).toHaveBeenCalledTimes(1);
+    const callArgs = completionSpy.mock.calls[0]?.[0];
+    expect(callArgs?.input).toContain('[Usuario]: ¿Cómo estás?');
+    expect(callArgs?.input).toContain('[Usuario]: Y para hoy qué me recomiendas?');
+  });
+
+  it('persists assistant text from terminal stream done events', async () => {
+    const sessionId = 'session-terminal-done';
+    createSession(sessionId, 'thread-terminal-done', 'wallet-1');
+
+    vi.spyOn(azureResponsesClient, 'callAzureResponses').mockResolvedValueOnce({
+      id: 'r-terminal',
+      object: 'response',
+      status: 'completed',
+      output: [],
+    });
+    vi.spyOn(azureResponsesClient, 'callAzureResponsesStream').mockResolvedValueOnce(
+      makeTerminalDoneStream('Respuesta final desde done'),
+    );
+
+    const response = await proxyAgenticChat({
+      type: 'user_message',
+      content: 'Dame un resumen',
+      session_id: sessionId,
+      user_address: 'wallet-1',
+    });
+
+    expect(response.status).toBe(200);
+    const sseBody = await response.text();
+    expect(sseBody).toContain('Respuesta final desde done');
+
+    const session = getSession(sessionId);
+    expect(session?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'agent',
+          type: 'text',
+          content: 'Respuesta final desde done',
+        }),
+      ]),
+    );
+
+    const historyResponse = await proxyAgenticChat({
+      type: 'get_history',
+      session_id: sessionId,
+    });
+    const history = await historyResponse.json();
+    expect(history.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'agent',
+          type: 'text',
+          content: 'Respuesta final desde done',
+        }),
+      ]),
+    );
   });
 });
 

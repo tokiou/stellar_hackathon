@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   streamChat,
   postApprove,
   postFunctionResult,
   postReject,
+  getHistory,
   ApiClientError,
   type SwapGuardWarning,
 } from '@/lib/api/client';
@@ -61,11 +62,32 @@ export function useAgentMessage() {
   const completeProposal = useChatStore((state) => state.completeProposal);
   const canApproveProposal = useChatStore((state) => state.canApproveProposal);
   const setConversationExpired = useChatStore((state) => state.setConversationExpired);
+  const hydrateSessionHistory = useChatStore((state) => state.hydrateSessionHistory);
+  const clearSessionData = useChatStore((state) => state.clearSessionData);
 
   // Track pending state
   const isPendingRef = useRef(false);
   const [isPending, setIsPending] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const hydrateSession = useCallback(async () => {
+    const sessionId = useChatStore.getState().sessionId;
+    if (!sessionId) return;
+    try {
+      const history = await getHistory(sessionId);
+      hydrateSessionHistory(history.session_id, history.messages, history.pending_proposal);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.code === 'session_not_found') {
+        clearSessionData();
+      } else {
+        console.error('[chat] Failed to hydrate session history:', error);
+      }
+    }
+  }, [clearSessionData, hydrateSessionHistory]);
+
+  useEffect(() => {
+    void hydrateSession();
+  }, [hydrateSession]);
 
   const sendUserMessage = useCallback(async (content: string) => {
     const blocked = useChatStore.getState().isInputBlocked();
