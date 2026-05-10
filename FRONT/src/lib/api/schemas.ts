@@ -124,15 +124,11 @@ export const FunctionApproveResponseSchema = AgentMessageResponseSchema.extend({
     state: z.literal('awaiting_signature'),
     expires_at: z.string(),
   }),
-  transaction: z
-    .object({
-      format: z.literal('base64_versioned_transaction'),
-      unsigned_tx_base64: z.string(),
-      recent_blockhash: z.string(),
-      last_valid_block_height: z.number().int(),
-      network: z.enum(['devnet', 'mainnet-beta']),
-    })
-    .optional(),
+  transaction: TransactionPayloadSchema.extend({
+    recent_blockhash: z.string(),
+    last_valid_block_height: z.number().int(),
+    network: z.enum(['devnet', 'mainnet-beta']),
+  }).optional(),
 });
 
 export const ChatFunctionResultSchema = z.object({
@@ -225,11 +221,13 @@ export const SSEProposalSchema = z.object({
     provider: z.string().optional(),
   }),
   risk: RiskInfoSchema,
-  execution: z.object({
-    mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
-    network: z.enum(['devnet', 'mainnet-beta']),
-    expires_at: z.string(),
-    expected_user_address: z.string().optional(),
-  }),
+  execution: z
+    .object({
+      mode: z.enum(['phantom_sign_and_send', 'phantom_execute_then_optional_backend_proof']),
+      network: z.enum(['devnet', 'mainnet-beta']),
+      expires_at: z.string(),
+      expected_user_address: z.string().optional(),
+    })
+    .optional(),
   timestamp: z.string(),
 });

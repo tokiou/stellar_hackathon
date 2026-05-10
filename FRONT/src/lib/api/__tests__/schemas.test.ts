@@ -159,6 +159,41 @@ describe('api schemas', () => {
     expect(parsed.messages[0].type).toBe('text');
   });
 
+  it('validates swap approve response with proposal_state and swap execution', () => {
+    const parsed = FunctionApproveResponseSchema.parse({
+      messages: [
+        {
+          type: 'text',
+          content: 'Swap preparado. Firma en tu wallet para ejecutar.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      transaction: {
+        format: 'base64_versioned_transaction',
+        unsigned_tx_base64: 'AQB0ZXN0',
+        recent_blockhash: 'testhash',
+        last_valid_block_height: 1234,
+        network: 'devnet',
+        execution_type: 'orca_swap',
+      },
+      swap_execution: {
+        provider: 'orca_whirlpools_devnet',
+        pair: 'SOL/USDC',
+        input_amount: 0.5,
+        slippage_bps: 100,
+        quote: null,
+      },
+    });
+
+    expect(parsed.proposal_state.state).toBe('awaiting_signature');
+    expect(parsed.swap_execution?.provider).toBe('orca_whirlpools_devnet');
+    expect(parsed.transaction?.execution_type).toBe('orca_swap');
+  });
+
   it('allows conditional buy proposal params and execution envelope', () => {
     const parsedParams = ConditionalBuySolParamsSchema.parse({
       input_token: 'USDC',

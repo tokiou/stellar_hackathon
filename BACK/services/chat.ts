@@ -932,6 +932,7 @@ async function handleFunctionApprove(request: {
   if (toolName === 'swap_orca_usdc_to_sol') {
     const swapArgs = toolArgs as OrcaSwapParams & { quote?: unknown };
     if (!session.userAddress) {
+      clearPendingProposal(request.session_id);
       return jsonResponse(
         { error: { code: 'no_wallet', message: 'No wallet connected in session' } },
         { status: 400 }
@@ -948,6 +949,12 @@ async function handleFunctionApprove(request: {
         slippageBps: swapArgs.slippage_bps,
       });
     } catch (e) {
+      updateSession(request.session_id, {
+        pendingProposal: {
+          ...proposal,
+          state: 'failed',
+        },
+      });
       return jsonResponse(
         {
           error: {
@@ -961,7 +968,25 @@ async function handleFunctionApprove(request: {
 
     // Note: We don't set execute.status here because the transaction hasn't been signed/sent yet.
     // The frontend will sign, send, and set the real status + tx_hash.
-    const response = {
+    const response: {
+      messages: AgentMessage[];
+      proposal_state: { state: 'awaiting_signature'; expires_at: string };
+      swap_execution: {
+        provider: string;
+        pair: string;
+        input_amount: number;
+        slippage_bps: number;
+        quote: unknown;
+      };
+      transaction: {
+        format: 'base64_versioned_transaction' | 'base64_legacy_transaction';
+        unsigned_tx_base64: string;
+        recent_blockhash: string;
+        last_valid_block_height: number;
+        network: 'devnet';
+        execution_type: 'orca_swap';
+      };
+    } = {
       messages: [
         {
           type: 'text',
@@ -969,6 +994,10 @@ async function handleFunctionApprove(request: {
           timestamp: now(),
         },
       ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: new Date(proposal.expiresAt).toISOString(),
+      },
       swap_execution: {
         provider: 'orca_whirlpools_devnet',
         pair: `${swapArgs.input_token}/${swapArgs.output_token}`,
@@ -985,6 +1014,16 @@ async function handleFunctionApprove(request: {
         execution_type: 'orca_swap',
       },
     };
+
+    updateSession(request.session_id, {
+      pendingProposal: {
+        ...proposal,
+        state: 'awaiting_signature',
+        recentBlockhash: unsigned.recentBlockhash,
+        lastValidBlockHeight: unsigned.lastValidBlockHeight,
+      },
+    });
+
     return jsonResponse(response, { status: 200 });
   }
 

@@ -71,8 +71,15 @@ export function useAgentMessage() {
           onDone: (data) => {
             if (!data.awaiting_approval) {
               finishStreaming();
+              return;
             }
-            // If awaiting_approval, the proposal handler already updated status
+            // Safety fallback: if backend says awaiting approval but proposal was
+            // rejected by schema/parsing, avoid leaving UI in "thinking" state.
+            const hasPendingProposal = useChatStore.getState().pendingProposal !== null;
+            if (!hasPendingProposal) {
+              finishStreaming();
+              setStatus('idle');
+            }
           },
           onError: (error) => {
             console.warn('[chat] SSE error:', error.code, error.message);
