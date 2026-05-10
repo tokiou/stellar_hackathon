@@ -73,6 +73,8 @@ const VAULT_CONFIG_SEED = Buffer.from('vault-config');
 const ORDER_SEED = Buffer.from('order');
 const ESCROW_AUTHORITY_SEED = Buffer.from('escrow-authority');
 const SOL_VAULT_SEED = Buffer.from('sol-vault');
+const TOKEN_PROGRAM_ID = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID_DEFAULT = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 const DEFAULT_ORACLE_FEED =
   process.env.PYTH_SOL_USD_FEED ||
@@ -113,7 +115,7 @@ function getUsdcDecimals(): number {
 }
 
 function getAssociatedTokenProgramId(): web3.PublicKey {
-  const associatedTokenProgramId = process.env.ASSOCIATED_TOKEN_PROGRAM_ID || web3.ASSOCIATED_TOKEN_PROGRAM_ID.toBase58();
+  const associatedTokenProgramId = process.env.ASSOCIATED_TOKEN_PROGRAM_ID || ASSOCIATED_TOKEN_PROGRAM_ID_DEFAULT.toBase58();
   return new web3.PublicKey(associatedTokenProgramId);
 }
 
@@ -176,7 +178,7 @@ function deriveSolVaultPda(vaultConfig: web3.PublicKey): web3.PublicKey {
 
 function deriveAssociatedTokenAddress(owner: web3.PublicKey, mint: web3.PublicKey): web3.PublicKey {
   return web3.PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), web3.TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
     getAssociatedTokenProgramId(),
   )[0];
 }
@@ -243,10 +245,9 @@ function deriveInstructionAccounts(input: {
     { pubkey: input.treasuryUsdcAta, isSigner: false, isWritable: true },
     { pubkey: input.usdcMint, isSigner: false, isWritable: false },
     { pubkey: input.oracleFeed, isSigner: false, isWritable: false },
-    { pubkey: web3.TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: getAssociatedTokenProgramId(), isSigner: false, isWritable: false },
     { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: web3.SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
   ];
 }
 
@@ -340,7 +341,7 @@ export async function buildConditionalBuyCreateOrderTx(input: ConditionalBuyOrde
 
   const expiresAtUnix = input.expires_at_unix || nowUnixSeconds() + 3600;
 
-  const instructionData = Buffer.alloc(8 + 8 + 8 + 8 + 8 + 32 + 32 + 4 + 2 + 8);
+  const instructionData = Buffer.alloc(8 + 8 + 8 + 8 + 8 + 8 + 32 + 32 + 4 + 2 + 8);
   let offset = 0;
   instructionDiscriminator('create_order_and_deposit').copy(instructionData, offset);
   offset += 8;

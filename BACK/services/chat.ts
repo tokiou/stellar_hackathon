@@ -27,10 +27,10 @@ import {
 import {
   evaluateConditionalBuy,
   type ConditionalBuySolParams,
+  type ConditionalBuyOrderTxInput,
   buildConditionalBuyCreateOrderTx,
   toConditionalBuyProposalPayload,
 } from './tools/conditionalBuySol';
-import { verifyOracleExecutionTx } from './onchainApproval';
 import {
   callAzureResponsesStream,
   callAzureResponses,
@@ -392,7 +392,7 @@ async function handleUserMessage(request: {
 
       // Build conversation
       const systemInstruction =
-        'Eres un asistente de wallet para Solana llamado Wallet Copilot. ' +
+        'Eres un asistente de wallet para Solana llamado Compass. ' +
         'Ayudas a los usuarios a realizar transferencias y compras condicionales de SOL de forma segura. ' +
         'Cuando el usuario pida transferir SOL o tokens, usa la herramienta transfer. ' +
         'Cuando el usuario pida comprar SOL solo si el precio está por debajo de X, usa la herramienta conditional_buy_sol. ' +
@@ -863,28 +863,29 @@ async function handleFunctionApprove(request: {
       );
     }
 
+    const normalizedQuote = Number(buyArgs.target_price_usd) || 1;
+    const orderPayloadCandidate = toConditionalBuyProposalPayload(
+      {
+        input_token: 'USDC',
+        input_amount: buyArgs.input_amount,
+        target_price_usd: buyArgs.target_price_usd,
+        min_sol_out: buyArgs.min_sol_out,
+        desired_sol_amount: buyArgs.desired_sol_amount,
+        max_usdc_in: buyArgs.max_usdc_in,
+        max_oracle_age_seconds: buyArgs.max_oracle_age_seconds,
+        max_confidence_bps: buyArgs.max_confidence_bps,
+        recipient: buyArgs.recipient,
+        expires_at: buyArgs.expires_at,
+        oracle_feed_pubkey: buyArgs.oracle_feed_pubkey,
+        client_order_id: buyArgs.client_order_id,
+        execution_mode: 'create_order_and_deposit',
+      },
+      session.userAddress,
+      normalizedQuote,
+    );
+
     let unsignedCreateTx: { txBase64: string; blockhash: string; lastValidBlockHeight: number; orderPda: string; clientOrderId: number };
     try {
-      const orderPayloadCandidate = toConditionalBuyProposalPayload(
-        {
-          input_token: 'USDC',
-          input_amount: buyArgs.input_amount,
-          target_price_usd: buyArgs.target_price_usd,
-          min_sol_out: buyArgs.min_sol_out,
-          desired_sol_amount: buyArgs.desired_sol_amount,
-          max_usdc_in: buyArgs.max_usdc_in,
-          max_oracle_age_seconds: buyArgs.max_oracle_age_seconds,
-          max_confidence_bps: buyArgs.max_confidence_bps,
-          recipient: buyArgs.recipient,
-          expires_at: buyArgs.expires_at,
-          oracle_feed_pubkey: buyArgs.oracle_feed_pubkey,
-          client_order_id: buyArgs.client_order_id,
-          execution_mode: 'create_order_and_deposit',
-        },
-        session.userAddress,
-        Number(buyArgs.target_price_usd) || 1,
-      );
-
       const desiredSolAmount = orderPayloadCandidate.desired_sol_amount;
       if (!Number.isFinite(desiredSolAmount) || desiredSolAmount <= 0) {
         throw new Error('Cannot resolve desired SOL amount');
@@ -898,33 +899,15 @@ async function handleFunctionApprove(request: {
       const orderPayload: ConditionalBuyOrderTxInput = {
         userAddress: session.userAddress,
         desired_sol_amount: desiredSolAmount,
-        desired_sol_lamports: toConditionalBuyProposalPayload(
-          {
-            input_token: 'USDC',
-            input_amount: buyArgs.input_amount,
-            target_price_usd: buyArgs.target_price_usd,
-            min_sol_out: buyArgs.min_sol_out,
-            desired_sol_amount: buyArgs.desired_sol_amount,
-            max_usdc_in: buyArgs.max_usdc_in,
-            max_oracle_age_seconds: buyArgs.max_oracle_age_seconds,
-            max_confidence_bps: buyArgs.max_confidence_bps,
-            recipient: buyArgs.recipient,
-            expires_at: buyArgs.expires_at,
-            oracle_feed_pubkey: buyArgs.oracle_feed_pubkey,
-            client_order_id: buyArgs.client_order_id,
-            execution_mode: 'create_order_and_deposit',
-          },
-          session.userAddress,
-          Number(buyArgs.target_price_usd) || 1,
-        ).desired_sol_lamports,
-        max_usdc_in,
+        desired_sol_lamports: orderPayloadCandidate.desired_sol_lamports,
+        max_usdc_in: maxUsdcIn,
         target_price_usd: buyArgs.target_price_usd,
         recipient: buyArgs.recipient || session.userAddress,
         expires_at_unix: expiresAtUnix,
-        client_order_id: buyArgs.client_order_id || Math.max(1, Math.floor(Date.now())),
-        oracle_feed_pubkey: buyArgs.oracle_feed_pubkey || process.env.PYTH_SOL_USD_FEED || '',
-        max_oracle_age_seconds: buyArgs.max_oracle_age_seconds || 120,
-        max_confidence_bps: buyArgs.max_confidence_bps || 500,
+        client_order_id: orderPayloadCandidate.client_order_id,
+        oracle_feed_pubkey: orderPayloadCandidate.oracle_feed_pubkey,
+        max_oracle_age_seconds: orderPayloadCandidate.max_oracle_age_seconds,
+        max_confidence_bps: orderPayloadCandidate.max_confidence_bps,
       };
       unsignedCreateTx = await buildConditionalBuyCreateOrderTx(orderPayload);
     } catch (e) {
@@ -1116,36 +1099,16 @@ async function handleFunctionResult(request: {
   }
 
   const pendingProposal = session.pendingProposal;
-  if (pendingProposal.toolName === 'conditional_buy_sol' && request.status === 'confirmed') {
-    const expectedOrder = typeof (pendingProposal.toolArgs as { order_pda?: string }).order_pda === 'string'
-      ? ((pendingProposal.toolArgs as { order_pda?: string }).order_pda as string)
-      : undefined;
-    const proof = await verifyOracleExecutionTx({
-      execute_tx_signature: request.tx_signature,
-      expected_signer: pendingProposal.expectedUserAddress || session.userAddress || undefined,
-      expected_network: pendingProposal.network,
-      expected_order_pda: expectedOrder,
-    });
-
-    if (!proof.ok) {
-      updateSession(request.session_id, {
-        pendingProposal: {
-          ...pendingProposal,
-          state: 'failed',
-          txSignature: request.tx_signature,
+  if (pendingProposal.toolName === 'conditional_buy_sol' && request.status === 'confirmed' && request.error_message) {
+    return jsonResponse(
+      {
+        error: {
+          code: 'onchain_result_declined',
+          message: request.error_message,
         },
-      });
-
-      return jsonResponse(
-        {
-          error: {
-            code: 'onchain_verification_failed',
-            message: proof.reason || 'On-chain verification failed',
-          },
-        },
-        { status: 400 }
-      );
-    }
+      },
+      { status: 400 },
+    );
   }
 
   const statusToPersist = request.status === 'failed' ? 'failed' : request.status === 'confirmed' ? 'confirmed' : 'submitted';
