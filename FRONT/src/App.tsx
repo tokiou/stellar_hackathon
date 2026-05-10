@@ -1,38 +1,17 @@
 'use client';
 
-import { useMemo } from 'react';
-import type { FC } from 'react';
 import { Toaster } from '@/components/ui/toaster';
-import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
-import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-import {
-  PhantomWalletAdapter,
-} from '@solana/wallet-adapter-wallets';
-import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { clusterApiUrl } from '@solana/web3.js';
-import Index from './pages/Index';
+import { AppShell } from './components/layout/AppShell';
+import { QueryProvider } from './providers/QueryProvider';
+import { ThemeProvider } from './providers/ThemeProvider';
 
-const App: FC = () => {
-  const network = WalletAdapterNetwork.Devnet;
-  const endpoint = useMemo(() => clusterApiUrl(network), [network]);
-
-  const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-    ],
-    [],
-  );
-
+export default function App() {
   return (
-    <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>
-          <Index />
-          <Toaster />
-        </WalletModalProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <QueryProvider>
+      <ThemeProvider>
+        <AppShell />
+        <Toaster />
+      </ThemeProvider>
+    </QueryProvider>
   );
-};
-
-export default App;
+}
