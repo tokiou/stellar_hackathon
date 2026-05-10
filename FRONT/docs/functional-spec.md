@@ -8,23 +8,23 @@
 
 ## Product goal
 
-Construir el frontend de Wallet Copilot como un chat-first UI para operar con un agent. El usuario se autentica con Phantom Embedded + Google, ve su wallet/balances y conversa con el agent. El agent decide si ejecuta automáticamente o si necesita confirmación manual.
+Construir el frontend de Wallet Copilot como un chat-first UI para operar con un agent. El usuario conecta Phantom, ve su wallet/balances y conversa con el agent. El agent decide si una acción requiere confirmación manual y prepara transacciones unsigned cuando corresponde.
 
 ## Decisiones funcionales obligatorias
 
 - Framework: Next.js 14+ App Router.
 - UI: Tailwind CSS + shadcn/ui.
-- Wallet: `@phantom/react-sdk` solo para login/display/export key/disconnect.
+- Wallet: Phantom injected/browser extension para conexión, firma y envío de transacciones preparadas por backend.
 - Chain: Solana mainnet para el hackathon.
-- Transacciones: el frontend **no construye, no simula, no firma y no envía** transacciones.
+- Transacciones: el backend prepara transacciones unsigned; el frontend las deserializa, valida la wallet conectada y las firma/envía con Phantom.
 - Providers externos: el frontend **no llama directamente** a Jupiter, Helius, Birdeye, Solana RPC ni risk-score APIs.
-- Agent/backend: toda ejecución, risk policy, quotes, receipts y provider fallback vive detrás de `/api/*` y `BACK/services/*`.
+- Agent/backend: risk policy, quotes, provider fallback y construcción canónica de transacciones viven detrás de `/api/*` y `BACK/services/*`.
 
 ## Experiencia principal
 
 ### Pre-login
 
-Mostrar una pantalla simple con CTA de Google/Phantom Embedded según lo defina `ConnectButton`. No hay flows multicuenta ni onramp.
+Mostrar una pantalla simple con CTA para conectar Phantom según lo defina `ConnectButton`. No hay flows multicuenta ni onramp.
 
 ### App conectada
 
@@ -38,6 +38,7 @@ Todo pasa por `POST /api/agent/message`:
 
 - `{ type: 'user_message', content, user_threshold_usd? }`
 - `{ type: 'function_approve' }`
+- `{ type: 'function_result', tx_signature, status }` opcional luego de que Phantom envía una transacción.
 - `{ type: 'function_reject' }`
 
 El backend responde `messages: AgentMessage[]` con:
@@ -45,6 +46,7 @@ El backend responde `messages: AgentMessage[]` con:
 - `text` sin `execute`: mensaje normal del agent.
 - `text` con `execute`: resultado de una ejecución hecha por el agent.
 - `function_call`: propuesta pendiente que bloquea el input hasta Confirm/Cancel.
+- `function_approve` puede devolver `unsigned_tx_base64` y estado `awaiting_signature`; el frontend firma/envía con Phantom.
 - `alert`: alerta informativa/warning/danger no necesariamente asociada a una ejecución.
 
 Solo puede existir una propuesta pendiente por sesión.
@@ -63,7 +65,7 @@ Cualquier explicación tipo “how we checked this” debe venir de campos del b
 
 - Zustand: mensajes, propuesta pendiente, status del chat y settings locales.
 - React Query: server state de endpoints propios (`/api/wallet/*`, `/api/network/*`, `/api/prices`).
-- Phantom SDK: estado de conexión, addresses, connect/disconnect/export key.
+- Phantom injected: estado de conexión, address, connect/disconnect y firma/envío de unsigned transactions preparadas por backend.
 
 `pendingProposal` no se persiste; un refresh cancela implícitamente la propuesta activa.
 

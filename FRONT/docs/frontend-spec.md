@@ -15,14 +15,14 @@ Spec del frontend para el proyecto Solana Hackathon. Cubre estructura, wallet la
 | Framework | Next.js 14+ App Router (fullstack en Vercel) |
 | Lenguaje | TypeScript |
 | UI | Tailwind CSS + shadcn/ui |
-| Wallet | Phantom Embedded Wallet SDK (`@phantom/react-sdk`) |
-| Auth | Google login (provider único) |
-| Custodia | Self-custodial vía Phantom Embedded (TEE-based) |
+| Wallet | Phantom Browser Extension / injected provider |
+| Auth | Conexión directa con Phantom |
+| Custodia | Self-custodial vía Phantom |
 | Modelo de operación | Híbrido: agent autónomo bajo threshold, confirmación manual sobre threshold |
 | Recovery | Login con Google + opción de exportar seed key en Settings |
 | Chain | Solana (mainnet) — multichain queda fuera de scope para hackathon |
 | Estructura repo | `FRONT/src/` para todo el código de UI, consumido desde `app/page.tsx` |
-| **Transacciones** | **Toda la lógica de tx (build, sign, submit) vive en el agent. El frontend NO firma ni habla con la blockchain directamente.** |
+| **Transacciones** | **El backend/agent interpreta intención, aplica risk checks y prepara unsigned transactions; el frontend firma/envía esas transacciones con Phantom injected.** |
 
 ---
 
@@ -42,8 +42,8 @@ class-variance-authority
 clsx
 tailwind-merge
 
-# Wallet (solo login + display + export key, NO transacciones)
-@phantom/react-sdk       # Embedded wallet SDK
+# Wallet
+window.phantom.solana    # Phantom injected provider: connect + signAndSendTransaction
 
 # Estado y data fetching
 zustand                  # Estado global liviano
@@ -133,35 +133,24 @@ FRONT/src/
 
 ---
 
-## 3. Wallet layer — Phantom Embedded (solo auth + display)
+## 3. Wallet layer — Phantom injected
 
-> ⚠️ **El frontend NO maneja transacciones.** Todo lo relacionado con construir, firmar y enviar transacciones lo maneja el agent en el backend. La wallet en el frontend cumple solamente tres roles: identificar al usuario, mostrar su address, y permitir exportar la private key.
+> ⚠️ **El frontend firma y envía solo transacciones unsigned preparadas por el backend.** El agent/backend interpreta la intención, aplica guardrails, consulta providers y construye la transacción canónica. El frontend no calcula riesgo ni consulta providers externos.
 
 ### 3.1 Lo que el SDK te resuelve solo
 
-- Login con Google (OAuth flow completo)
-- Generación de keypair self-custodial (TEE-based, sin seed visible)
-- Persistencia de sesión entre reloads
-- Sincronización con la app/extensión Phantom si el usuario después la instala con la misma cuenta de Google
-- Modal de export de private key (Settings → Advanced)
+- Conexión con la cuenta Phantom del usuario.
+- Exposición de la public key conectada.
+- Firma y envío con `signAndSendTransaction` para unsigned transactions preparadas por backend.
+- Eventos de conexión, desconexión y cambio de cuenta.
 
 ### 3.2 Setup base
 
 ```tsx
-// FRONT/src/providers/PhantomProvider.tsx
-import { PhantomProvider, AddressType } from '@phantom/react-sdk';
-
-<PhantomProvider
-  config={{
-    providers: ['google'],              // Solo Google según decisión
-    addressTypes: [AddressType.solana], // Solo Solana
-    appId: process.env.NEXT_PUBLIC_PHANTOM_APP_ID!,
-  }}
-  appName="Wallet Copilot"
-  appIcon="/icon.png"
->
-  {children}
-</PhantomProvider>
+// FRONT/src/types/phantom.ts
+export function getPhantomProvider() {
+  return window.phantom?.solana?.isPhantom ? window.phantom.solana : undefined;
+}
 ```
 
 ### 3.3 Hook unificado
@@ -169,29 +158,28 @@ import { PhantomProvider, AddressType } from '@phantom/react-sdk';
 ```tsx
 // FRONT/src/hooks/useWallet.ts
 export function useWallet() {
-  const { isConnected, addresses, connect, disconnect } = usePhantom();
-  const solanaAddress = addresses.find(a => a.type === 'solana')?.address;
+  const provider = getPhantomProvider();
+  const address = provider?.publicKey?.toBase58();
 
   // Balances vienen del backend (el agent los lee y nos los pasa)
   const { data: balances } = useQuery({
-    queryKey: ['balances', solanaAddress],
-    queryFn: () => fetch(`/api/wallet/balances?address=${solanaAddress}`).then(r => r.json()),
-    enabled: !!solanaAddress,
+    queryKey: ['balances', address],
+    queryFn: () => fetch(`/api/wallet/balances?address=${address}`).then(r => r.json()),
+    enabled: !!address,
     refetchInterval: 30_000,
   });
 
-  return { isConnected, address: solanaAddress, connect, disconnect, balances };
+  return { address, connect, disconnect, balances, signAndSendPreparedTransaction };
 }
 ```
 
-Nótese: NO se exporta `signAndSendTransaction`. El frontend nunca firma. Si el usuario aprieta "Confirm" en una propuesta, el frontend solo POSTea al backend y el agent ejecuta.
+Nótese: el frontend no construye la transacción desde la intención del usuario. Si el usuario aprieta "Confirm" en una propuesta, el frontend POSTea `function_approve`; el backend responde una unsigned transaction; el frontend la firma/envía con Phantom injected y puede reportar `tx_signature` al backend mediante `function_result`.
 
 ### 3.4 Variable de entorno
 
 ```bash
 # .env.local
-NEXT_PUBLIC_PHANTOM_APP_ID=...        # Lo sacás de phantom.com/portal
-# No exponer RPC/provider keys en el frontend. RPC, Helius, Birdeye y Jupiter viven en backend/BACK/services.
+# No exponer RPC/provider keys en el frontend. RPC, Helius, Birdeye, Jupiter y risk providers viven en backend/BACK/services.
 ```
 
 ---
@@ -355,15 +343,15 @@ executing ─(agent responde con text+execute)─→ idle
 
 ### 6.3 Qué vive en el SDK de Phantom
 
-- `isConnected`, `addresses`, `connect`, `disconnect`, `exportPrivateKey`.
-- NO se accede a métodos de signing — todo eso vive en el backend.
+- `isConnected`, `address`, `connect`, `disconnect`.
+- `signAndSendPreparedTransaction(unsigned_tx_base64)` para transacciones preparadas por backend.
 - No duplicar en Zustand. Acceder vía `usePhantom()` o el wrapper `useWallet`.
 
 ---
 
 ## 7. Protocolo de comunicación con el agent (function-calling)
 
-El agent y el frontend hablan vía un protocolo de **function-calling**: el agent propone funciones a ejecutar, el frontend muestra la propuesta al usuario y devuelve la aprobación o el rechazo. La ejecución real (firma + submit a la blockchain) la hace el agent server-side.
+El agent y el frontend hablan vía un protocolo de **function-calling**: el agent propone funciones a ejecutar, el frontend muestra la propuesta al usuario y devuelve la aprobación o el rechazo. Para transacciones de usuario, el backend prepara una unsigned transaction y el frontend firma/envía con Phantom injected.
 
 ### 7.1 Mensajes del agent → frontend
 
@@ -492,7 +480,7 @@ type StakeParams = {
 
 ## 8. Flujo de swap end-to-end
 
-> El frontend es un **chat client puro**. No firma, no construye txs, no toca la blockchain. Solo manda mensajes/aprobaciones al agent y renderiza lo que recibe.
+> El frontend es un **chat client con frontera de firma Phantom**. No calcula riesgo, no consulta providers externos y no construye txs desde intención de usuario. Sí firma/envía con Phantom las unsigned transactions preparadas por el backend.
 >
 > **Sesión:** una sola propuesta pendiente por sesión. Mientras hay una propuesta activa, el `ChatInput` queda bloqueado.
 
@@ -656,7 +644,7 @@ Content-Type: application/json
 Authorization: Bearer <session_token>   # cuando auth real esté definida
 ```
 
-> **Open question (#7):** cómo se obtiene el `session_token`. Opción preferida: JWT/session token emitido por el backend tras verificar la sesión de Phantom Embedded. Para hackathon mínimo viable: el frontend puede mandar el `address` en el body y el backend confiar — inseguro pero suficiente para demo. **Definir antes de Fase 2.**
+> **Open question (#7):** cómo se obtiene el `session_token`. Para hackathon mínimo viable: el frontend puede mandar el `address` en el body y el backend confiar — inseguro pero suficiente para demo. **Definir antes de Fase 2.**
 
 ### 11.3 POST /api/agent/message — chat principal con el agent
 
@@ -905,8 +893,7 @@ Sheet/dialog accesible desde sidebar Quick Action:
 - **Risk warnings**: toggle on/off
 - **Account**:
   - Mostrar dirección Solana completa + copy
-  - "Export private key" — abre Phantom Embedded modal de export (handled por SDK)
-  - "Disconnect" — `phantom.disconnect()` + `clearChat()`
+  - "Disconnect" — desconecta Phantom y limpia estado local
 - **Sobre**: versión, link a docs
 
 ---
@@ -945,9 +932,9 @@ shadcn-init con `--primary` azul. Override del default si hace falta.
 - Componentes vacíos con datos hardcoded del mockup
 - **Deliverable**: tu UI se ve idéntica al mockup, sin lógica
 
-### Fase 2 — Phantom Embedded auth + balances del backend
-- `PhantomProvider` + `useWallet` (solo login + address + export key)
-- ConnectButton funcional (Google login)
+### Fase 2 — Phantom injected auth + balances del backend
+- `useWallet` con Phantom injected (connect/disconnect/address)
+- ConnectButton funcional con Phantom
 - `/api/wallet/balances` consumiendo desde el backend
 - `BalanceCard` y `AssetChip` con datos reales
 
@@ -990,12 +977,10 @@ shadcn-init con `--primary` azul. Override del default si hace falta.
 1. **¿Idioma del producto?** El mockup tiene texto en inglés ("I'd like to swap...", "Confirm Swap"). ¿Mantenemos inglés en la UI o lo pasamos a español?
 2. **¿Primera pantalla pre-login?** Cuando `!isConnected`, ¿qué se ve? Una landing simple con CTA "Sign in with Google" o saltamos directo al modal?
 3. **¿Avatar del usuario?** El mockup muestra un avatar de una persona — ¿lo dejamos como placeholder genérico o pulleamos foto de Google profile?
-4. **🚨 ¿Cómo firma el agent las transacciones?** Decisión arquitectural pendiente, no bloquea el frontend pero sí el backend. Dos opciones:
-   - **(a) Agent sub-wallet:** el agent tiene su propio keypair server-side. El usuario fondea esa wallet desde su Phantom. Todas las txs salen del agent. Más simple para hackathon.
-   - **(b) Phantom server-sdk:** el agent firma como el usuario usando `@phantom/server-sdk` con el flow de auth correspondiente. Más legítimo en términos de custodia, más complejo de setear.
+4. **Firma de transacciones:** decisión tomada. El backend prepara unsigned transactions y el frontend las firma/envía con Phantom injected. El backend puede recibir `tx_signature` como callback/proof opcional, pero no recibe `signed_tx_base64`.
 5. **¿Threshold en USD o en SOL nativo?** En hackathon, USD es más intuitivo pero requiere price oracle. Alternativa: threshold por % del balance total (no requiere precio absoluto).
 6. **Deep links / share:** ¿queremos que un swap proposal sea compartible vía URL? (probablemente fuera de scope)
-7. **🔐 Auth front ↔ back.** ¿Cómo se obtiene el `session_token` que va en el header `Authorization`? Opción preferida: JWT/session token emitido por el backend tras verificar la sesión de Phantom Embedded. Para demo mínimo: address en el body sin auth real. Define antes de Fase 2. El frontend no debe introducir signing de transacciones para resolver auth.
+7. **🔐 Auth front ↔ back.** ¿Cómo se obtiene el `session_token` que va en el header `Authorization`? Para demo mínimo: address en el body sin auth real. Define antes de Fase 2. La firma de transacciones con Phantom no debe reutilizarse como autenticación implícita del API.
 
 ---
 

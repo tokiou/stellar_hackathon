@@ -170,7 +170,7 @@ export const transferTool = tool(
       token: z.string().optional().describe('Símbolo del token (default: SOL)'),
       recipient: z.string().describe('Dirección de destino (Solana public key)'),
       memo: z.string().optional().describe('Memo opcional para la transacción'),
-    }) as any,
+    }),
   }
 );
 

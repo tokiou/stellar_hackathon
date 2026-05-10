@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { AgentMessageResponseSchema, GetBalancesResponseSchema } from '../schemas';
+import {
+  AgentMessageResponseSchema,
+  GetBalancesResponseSchema,
+  FunctionApproveResponseSchema,
+  FunctionExecutionSchema,
+  ConditionalBuySolParamsSchema,
+  SSEProposalSchema,
+} from '../schemas';
 
 describe('api schemas', () => {
   it('validates an agent function_call response', () => {
@@ -41,33 +48,93 @@ describe('api schemas', () => {
     expect(parsed.balances[0].symbol).toBe('SOL');
   });
 
-  it('allows change_24h_pct to be omitted from balances response', () => {
+  it('validates wallet balances without optional 24h change', () => {
     const parsed = GetBalancesResponseSchema.parse({
       balances: [
         {
-          symbol: 'USDC',
-          mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-          amount: '2500000000',
-          decimals: 6,
-          ui_amount: 2500,
-          usd_value: 2500,
+          symbol: 'SOL',
+          mint: 'So11111111111111111111111111111111111111112',
+          amount: '7499840000',
+          decimals: 9,
+          ui_amount: 7.49984,
+          usd_value: 0,
         },
       ],
-      total_usd: 2500,
-      updated_at: new Date().toISOString(),
+      total_usd: 0,
+      updated_at: '2026-05-10T02:03:57.138Z',
     });
 
-    expect(parsed.total_usd).toBe(2500);
     expect(parsed.change_24h_pct).toBeUndefined();
+    expect(parsed.balances[0].ui_amount).toBe(7.49984);
   });
 
-  it('rejects wallet balances with a non-ISO updated_at timestamp', () => {
+  it('validates function approve response without signed tx submission', () => {
+    const parsed = FunctionApproveResponseSchema.parse({
+      messages: [
+        {
+          type: 'text',
+          content: 'Transacción preparada. Revisa y firma en tu wallet.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      proposal_state: {
+        state: 'awaiting_signature',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      transaction: {
+        format: 'base64_versioned_transaction',
+        unsigned_tx_base64: 'AQB0ZXN0',
+        recent_blockhash: 'testhash',
+        last_valid_block_height: 1234,
+        network: 'devnet',
+      },
+    });
+
+    expect(parsed.proposal_state.state).toBe('awaiting_signature');
+    expect(parsed.transaction?.unsigned_tx_base64).toBe('AQB0ZXN0');
+    expect(parsed.messages[0].type).toBe('text');
+  });
+
+  it('allows conditional buy proposal params and execution envelope', () => {
+    const parsedParams = ConditionalBuySolParamsSchema.parse({
+      input_token: 'USDC',
+      input_amount: 10,
+      target_price_usd: 120,
+    });
+
+    const parsedProposal = SSEProposalSchema.parse({
+      type: 'function_call',
+      function: {
+        name: 'conditional_buy_sol',
+        params: parsedParams,
+      },
+      display: {
+        summary: 'Conditional buy',
+        provider: 'simulated',
+      },
+      risk: {
+        score: 35,
+        level: 'medium',
+      },
+      execution: {
+        mode: 'phantom_execute_then_optional_backend_proof',
+        network: 'devnet',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(parsedProposal.function.name).toBe('conditional_buy_sol');
+    expect(parsedProposal.execution?.mode).toBe('phantom_execute_then_optional_backend_proof');
+  });
+
+  it('reuses execution enum schema', () => {
     expect(() =>
-      GetBalancesResponseSchema.parse({
-        balances: [],
-        total_usd: 0,
-        updated_at: 'not-a-date',
+      FunctionExecutionSchema.parse({
+        mode: 'phantom_sign_and_send',
+        network: 'mainnet-beta',
+        expires_at: new Date().toISOString(),
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 });

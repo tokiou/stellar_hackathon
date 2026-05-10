@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { getPhantomProvider, type PhantomPublicKey } from '@/types/phantom';
+import { web3 } from '@coral-xyz/anchor';
+import {
+  getPhantomProvider,
+  type PhantomExecutionErrorCode,
+  type PhantomExecutionResult,
+  type PhantomPublicKey,
+} from '@/types/phantom';
 import { getAllocationFromBalances, getHighlightBalances } from '@/lib/walletBalances';
 import { useWalletBalances } from './useWalletBalances';
 
@@ -8,6 +14,10 @@ type WalletState = {
   isConnecting: boolean;
   address: string | undefined;
   walletError: string | undefined;
+};
+
+type SignAndSendError = Error & {
+  code?: PhantomExecutionErrorCode;
 };
 
 const INITIAL_WALLET_STATE: WalletState = {
@@ -100,6 +110,54 @@ function attemptEagerConnect() {
     });
 }
 
+function toUint8Array(base64: string): Uint8Array {
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    bytes[i] = raw.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function decodeUnsignedTransaction(base64: string): web3.VersionedTransaction {
+  try {
+    return web3.VersionedTransaction.deserialize(toUint8Array(base64));
+  } catch (error) {
+    throw Object.assign(new Error(`Invalid unsigned transaction: ${getErrorMessage(error)}`), {
+      code: 'send_failed',
+    });
+  }
+}
+
+function mapPhantomError(error: unknown): { code: PhantomExecutionErrorCode; message: string } {
+  const message = getErrorMessage(error) || 'Phantom execution failed';
+  const lower = message.toLowerCase();
+
+  if (lower.includes('user rejected') || lower.includes('user denied') || lower.includes('denied')) {
+    return { code: 'user_rejected', message: 'El usuario rechazó la firma en Phantom.' };
+  }
+
+  if (lower.includes('account changed') || lower.includes('pubkey')) {
+    return { code: 'account_changed', message: 'La cuenta cambió durante la firma.' };
+  }
+
+  if (lower.includes('disconnected') || lower.includes('not connected')) {
+    return { code: 'phantom_not_connected', message: 'Phantom está desconectado.' };
+  }
+
+  if (lower.includes('blockhash') || lower.includes('expired')) {
+    return { code: 'blockhash_expired', message: 'La transacción venció; vuelve a aprobar para regenerarla.' };
+  }
+
+  return { code: 'send_failed', message };
+}
+
+function throwWithCode(code: PhantomExecutionErrorCode, message: string): never {
+  const error = new Error(message) as SignAndSendError;
+  error.code = code;
+  throw error;
+}
+
 export function useWallet() {
   const state = useSyncExternalStore(subscribeToWallet, getWalletSnapshot, getWalletSnapshot);
   const balancesQuery = useWalletBalances(state.address);
@@ -150,6 +208,51 @@ export function useWallet() {
     }
   }, []);
 
+  const signAndSendPreparedTransaction = useCallback(async (
+    unsignedTxBase64: string,
+    expectedUserAddress?: string
+  ): Promise<PhantomExecutionResult> => {
+    const provider = getPhantomProvider();
+
+    if (!provider) {
+      throwWithCode('phantom_not_detected', 'Phantom wallet no detectada. Instálala y recarga la página.');
+    }
+
+    if (!state.isConnected || !state.address) {
+      throwWithCode('phantom_not_connected', 'Phantom está desconectado.');
+    }
+
+    const connectedAddress = provider.publicKey?.toBase58() ?? state.address;
+    if (!connectedAddress) {
+      throwWithCode('phantom_not_connected', 'No se detectó cuenta conectada en Phantom.');
+    }
+
+    if (expectedUserAddress && connectedAddress !== expectedUserAddress) {
+      throwWithCode('wallet_mismatch', 'El wallet conectado no coincide con la propuesta.');
+    }
+
+    const tx = decodeUnsignedTransaction(unsignedTxBase64);
+
+    try {
+      const signResult = await provider.signAndSendTransaction(tx);
+      const signature = typeof signResult === 'string' ? signResult : signResult?.signature;
+
+      if (!signature) {
+        throwWithCode('send_failed', 'Phantom no devolvió una firma válida.');
+      }
+
+      const currentAddress = provider.publicKey?.toBase58() ?? connectedAddress;
+      if (expectedUserAddress && currentAddress !== expectedUserAddress) {
+        throwWithCode('account_changed', 'La cuenta cambió durante la firma.');
+      }
+
+      return { tx_signature: signature };
+    } catch (error) {
+      const mapped = mapPhantomError(error);
+      throwWithCode(mapped.code, mapped.message);
+    }
+  }, [state.isConnected, state.address]);
+
   useEffect(() => {
     initializePhantomEvents();
     attemptEagerConnect();
@@ -163,12 +266,13 @@ export function useWallet() {
     connect,
     disconnect,
     exportPrivateKey: undefined as undefined | (() => Promise<void>),
+    signAndSendPreparedTransaction,
     walletError: state.walletError,
     balances: balancesQuery.data,
+    allocation,
+    highlightBalances,
+    refreshBalances: balancesQuery.refetch,
     isBalancesLoading: balancesQuery.isLoading,
     balancesError: balancesQuery.error,
-    highlightBalances,
-    allocation,
-    refreshBalances: balancesQuery.refetch,
   };
 }
