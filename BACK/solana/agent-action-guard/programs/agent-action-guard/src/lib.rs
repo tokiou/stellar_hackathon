@@ -8,6 +8,8 @@ const PYTH_PRICE_ACCOUNT_SIZE: usize = 3312;
 const PYTH_MAGIC: u32 = 0xa1b2c3d4;
 const PYTH_VERSION: u32 = 2;
 const PYTH_PRICE_TYPE: u32 = 3;
+const TARGET_PRICE_EXPONENT: i32 = -8;
+const BPS_DENOMINATOR: i128 = 10_000;
 
 fn read_pyth_price(data: &[u8]) -> Result<(i64, u64, i32, i64)> {
     // Validate minimum size
@@ -56,6 +58,63 @@ fn read_pyth_price(data: &[u8]) -> Result<(i64, u64, i32, i64)> {
     let timestamp = i64::from_le_bytes(data[296..304].try_into().unwrap());
 
     Ok((price, conf, expo, timestamp))
+}
+
+fn convert_price_to_e8(price_value: i64, price_expo: i32) -> Result<i128> {
+    let price_i128 = price_value as i128;
+    let oracle_price_e8 = if price_expo == TARGET_PRICE_EXPONENT {
+        price_i128
+    } else if price_expo < TARGET_PRICE_EXPONENT {
+        let shift = (TARGET_PRICE_EXPONENT - price_expo) as u32;
+        let factor = 10i128
+            .checked_pow(shift)
+            .ok_or(error!(GuardError::ArithmeticOverflow))?;
+        price_i128
+            .checked_div(factor)
+            .ok_or(error!(GuardError::ArithmeticOverflow))?
+    } else {
+        let shift = (price_expo - TARGET_PRICE_EXPONENT) as u32;
+        let factor = 10i128
+            .checked_pow(shift)
+            .ok_or(error!(GuardError::ArithmeticOverflow))?;
+        price_i128
+            .checked_mul(factor)
+            .ok_or(error!(GuardError::ArithmeticOverflow))?
+    };
+
+    Ok(oracle_price_e8)
+}
+
+fn compute_confidence_bps(price_conf: u64, price_value: i64) -> Result<u64> {
+    let price_abs = (price_value as i128).abs();
+    require!(price_abs > 0, GuardError::InvalidOraclePrice);
+
+    let conf_bps_i128 = (price_conf as i128)
+        .checked_mul(BPS_DENOMINATOR)
+        .ok_or(error!(GuardError::ArithmeticOverflow))?
+        .checked_div(price_abs)
+        .ok_or(error!(GuardError::ArithmeticOverflow))?;
+
+    Ok(conf_bps_i128 as u64)
+}
+
+fn compute_deviation_bps(quoted_price_e8: u64, oracle_price_e8: i128) -> Result<u64> {
+    require!(quoted_price_e8 > 0, GuardError::InvalidQuotedPrice);
+    require!(oracle_price_e8 > 0, GuardError::InvalidOraclePrice);
+
+    let quoted_i128 = quoted_price_e8 as i128;
+    let diff = quoted_i128
+        .checked_sub(oracle_price_e8)
+        .ok_or(error!(GuardError::ArithmeticOverflow))?
+        .abs();
+
+    let deviation_bps_i128 = diff
+        .checked_mul(BPS_DENOMINATOR)
+        .ok_or(error!(GuardError::ArithmeticOverflow))?
+        .checked_div(oracle_price_e8)
+        .ok_or(error!(GuardError::ArithmeticOverflow))?;
+
+    Ok(deviation_bps_i128 as u64)
 }
 
 #[program]
@@ -204,15 +263,7 @@ pub mod agent_action_guard {
         require!(age <= staleness_seconds as i64, GuardError::OracleDataStale);
 
         // Convert to e8 for consistent compare
-        let oracle_price_e8: i128 = if price_expo == -8 {
-            price_value as i128
-        } else if price_expo < -8 {
-            let factor = 10i128.pow((-8 - price_expo) as u32);
-            (price_value as i128) / factor
-        } else {
-            let factor = 10i128.pow((price_expo + 8) as u32);
-            (price_value as i128) * factor
-        };
+        let oracle_price_e8 = convert_price_to_e8(price_value, price_expo)?;
 
         require!(oracle_price_e8 > 0, GuardError::InvalidOraclePrice);
         require!(
@@ -221,12 +272,65 @@ pub mod agent_action_guard {
         );
 
         // confidence bps relative to price
-        let price_abs = (price_value as i128).abs();
-        require!(price_abs > 0, GuardError::InvalidOraclePrice);
-        let conf_bps = ((price_conf as i128) * 10_000 / price_abs) as u64;
+        let conf_bps = compute_confidence_bps(price_conf, price_value)?;
         require!(
             conf_bps <= max_confidence_bps,
             GuardError::OracleConfidenceTooHigh
+        );
+
+        approval.executed = true;
+        Ok(())
+    }
+
+    /// Oracle-gated swap execution safety check.
+    ///
+    /// Compares the quoted swap price against Pyth oracle price and rejects
+    /// execution when deviation exceeds max_deviation_bps.
+    pub fn mark_executed_if_swap_price_within_band(
+        ctx: Context<MarkExecutedIfPriceBelow>,
+        quoted_price_usd_e8: u64,
+        max_deviation_bps: u16,
+        staleness_seconds: u64,
+        max_confidence_bps: u64,
+    ) -> Result<()> {
+        let approval = &mut ctx.accounts.action_approval;
+        require_keys_eq!(
+            approval.user,
+            ctx.accounts.user.key(),
+            GuardError::Unauthorized
+        );
+        check_approval_active(approval)?;
+        require!(
+            approval.action_type == ActionType::SimulatedSwap as u8,
+            GuardError::InvalidActionType
+        );
+        require_keys_eq!(
+            approval.oracle_feed,
+            ctx.accounts.oracle_price_feed.key(),
+            GuardError::OracleFeedMismatch
+        );
+
+        let current_time = Clock::get()?.unix_timestamp;
+
+        let oracle_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
+        let (price_value, price_conf, price_expo, price_timestamp) = read_pyth_price(&oracle_data)?;
+
+        let age = current_time.saturating_sub(price_timestamp);
+        require!(age <= staleness_seconds as i64, GuardError::OracleDataStale);
+
+        let oracle_price_e8 = convert_price_to_e8(price_value, price_expo)?;
+        require!(oracle_price_e8 > 0, GuardError::InvalidOraclePrice);
+
+        let conf_bps = compute_confidence_bps(price_conf, price_value)?;
+        require!(
+            conf_bps <= max_confidence_bps,
+            GuardError::OracleConfidenceTooHigh
+        );
+
+        let deviation_bps = compute_deviation_bps(quoted_price_usd_e8, oracle_price_e8)?;
+        require!(
+            deviation_bps <= max_deviation_bps as u64,
+            GuardError::PriceDeviationTooHigh
         );
 
         approval.executed = true;
@@ -414,4 +518,41 @@ pub enum GuardError {
     OracleConfidenceTooHigh,
     #[msg("Invalid oracle price")]
     InvalidOraclePrice,
+    #[msg("Invalid quoted swap price")]
+    InvalidQuotedPrice,
+    #[msg("Swap price deviation above allowed threshold")]
+    PriceDeviationTooHigh,
+    #[msg("Arithmetic overflow")]
+    ArithmeticOverflow,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computes_deviation_bps_within_band() {
+        // oracle=100, quoted=101 => 1%
+        let oracle_e8 = 10_000_000_000i128;
+        let quoted_e8 = 10_100_000_000u64;
+        let deviation = compute_deviation_bps(quoted_e8, oracle_e8).unwrap();
+        assert_eq!(deviation, 100);
+    }
+
+    #[test]
+    fn computes_deviation_bps_above_band() {
+        // oracle=95, quoted=140 => 47.36%
+        let oracle_e8 = 9_500_000_000i128;
+        let quoted_e8 = 14_000_000_000u64;
+        let deviation = compute_deviation_bps(quoted_e8, oracle_e8).unwrap();
+        assert!(deviation > 3000);
+    }
+
+    #[test]
+    fn converts_price_to_e8_with_negative_exponent() {
+        // 95.123456 with expo=-6 => 95_123_456, convert to e8 => 9_512_345_600
+        let price = 95_123_456i64;
+        let converted = convert_price_to_e8(price, -6).unwrap();
+        assert_eq!(converted, 9_512_345_600i128);
+    }
 }

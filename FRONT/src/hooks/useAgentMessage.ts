@@ -6,6 +6,7 @@ import {
   postFunctionResult,
   postReject,
   ApiClientError,
+  type SwapGuardWarning,
 } from '@/lib/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -33,6 +34,7 @@ export function useAgentMessage() {
   const setStatus = useChatStore((state) => state.setStatus);
   const setProposalUiState = useChatStore((state) => state.setProposalUiState);
   const setPendingProposal = useChatStore((state) => state.setPendingProposal);
+  const setSwapGuardWarning = useChatStore((state) => state.setSwapGuardWarning);
   const completeProposal = useChatStore((state) => state.completeProposal);
   const canApproveProposal = useChatStore((state) => state.canApproveProposal);
   const setConversationExpired = useChatStore((state) => state.setConversationExpired);
@@ -151,6 +153,14 @@ export function useAgentMessage() {
         addAgentMessages(response.messages);
       }
 
+      // Store swap guard warning if present (for UI to display)
+      if (response.swap_guard_warning) {
+        console.log('[chat] Swap guard warning:', response.swap_guard_warning.message);
+        setSwapGuardWarning(response.swap_guard_warning);
+      } else {
+        setSwapGuardWarning(null);
+      }
+
       if (!response.transaction?.unsigned_tx_base64) {
         completeProposal('failed', {
           status: 'failed',
@@ -225,6 +235,7 @@ export function useAgentMessage() {
     setStatus,
     setProposalUiState,
     setPendingProposal,
+    setSwapGuardWarning,
     signAndSendPreparedTransaction,
     queryClient,
   ]);

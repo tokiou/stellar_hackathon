@@ -1,15 +1,11 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
+import { getConnection } from './solanaConnection';
 
 export type OnchainApprovalProof = {
   execute_tx_signature: string;
   expected_signer?: string;
   expected_network?: 'devnet' | 'mainnet-beta';
 };
-
-function getConnection() {
-  const rpc = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
-  return new Connection(rpc, 'confirmed');
-}
 
 export async function verifyOracleExecutionTx(proof: OnchainApprovalProof): Promise<{
   ok: boolean;
