@@ -321,9 +321,15 @@ export function getAllocation(address: string): Promise<GetAllocationResponse> {
 }
 
 export function getTransactions(query: GetTransactionsQuery): Promise<GetTransactionsResponse> {
-  const params = new URLSearchParams({ address: query.address });
-  if (query.limit) params.set('limit', String(query.limit));
-  if (query.before) params.set('before', query.before);
+  const params = new URLSearchParams({ address: query.address.trim() });
+  const before = query.before?.trim();
+  if (query.limit) {
+    const normalizedLimit = Math.min(Math.max(1, Math.floor(query.limit)), 50);
+    params.set('limit', String(normalizedLimit));
+  }
+  if (before) {
+    params.set('before', before);
+  }
   return getJson(`/api/wallet/transactions?${params.toString()}`, GetTransactionsResponseSchema) as Promise<GetTransactionsResponse>;
 }
 

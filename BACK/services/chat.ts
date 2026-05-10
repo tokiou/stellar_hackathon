@@ -25,9 +25,10 @@ import {
   type TransferParams,
 } from './tools/transfer';
 import {
-  simulateBuySolQuote,
   evaluateConditionalBuy,
   type ConditionalBuySolParams,
+  buildConditionalBuyCreateOrderTx,
+  toConditionalBuyProposalPayload,
 } from './tools/conditionalBuySol';
 import { verifyOracleExecutionTx } from './onchainApproval';
 import {
@@ -153,7 +154,7 @@ const CONDITIONAL_BUY_SOL_TOOL: ResponsesToolDefinition = {
   description:
     'Prepara una compra condicional de SOL con USDC. ' +
     'Debe usarse cuando el usuario diga comprar SOL solo si el precio está por debajo de X USD. ' +
-    'No ejecuta swap real; prepara una aprobación condicionada a validación on-chain de oracle.',
+    'No ejecuta swap real; prepara una orden real de escrow en cadena, validada por oracle on-chain.',
   parameters: {
     type: 'object',
     properties: {
@@ -169,6 +170,10 @@ const CONDITIONAL_BUY_SOL_TOOL: ResponsesToolDefinition = {
       target_price_usd: {
         type: 'number',
         description: 'Ejecutar solo si SOL/USD es menor o igual a este precio',
+      },
+      desired_sol_amount: {
+        type: 'number',
+        description: 'Cantidad de SOL objetivo para la orden (opcional)',
       },
       min_sol_out: {
         type: 'number',
@@ -489,11 +494,50 @@ async function handleConditionalBuyToolCall(
   let toolArgs: ConditionalBuySolParams;
   try {
     const parsed = JSON.parse(toolCall.arguments || '{}');
+    const requestedAmount = Number(parsed.input_amount);
+    const requestedTarget = Number(parsed.target_price_usd);
+
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      throw new Error('invalid_input_amount');
+    }
+    if (!Number.isFinite(requestedTarget) || requestedTarget <= 0) {
+      throw new Error('invalid_target_price');
+    }
+
+    const recipient = typeof parsed.recipient === 'string' ? parsed.recipient : session.userAddress || '';
+    if (!recipient) {
+      await writeSSE(writer, encoder, 'error', {
+        code: 'no_wallet',
+        message: 'No wallet connected. Please connect your wallet first.',
+      });
+      await writeSSE(writer, encoder, 'done', { session_id: sessionId });
+      await writer.close();
+      return;
+    }
+
+    const desiredSolOut = Number(parsed.desired_sol_amount);
+    const minSolOut = Number(parsed.min_sol_out);
+    const requestedRecipient = typeof parsed.recipient === 'string' ? parsed.recipient : undefined;
+    const requestClientOrder = Number(parsed.client_order_id);
+    const requestMaxUsdc = Number(parsed.max_usdc_in);
+    const requestOracleAge = Number(parsed.max_oracle_age_seconds);
+    const requestConfidence = Number(parsed.max_confidence_bps);
+
     toolArgs = {
       input_token: 'USDC',
-      input_amount: parsed.input_amount,
-      target_price_usd: parsed.target_price_usd,
-      min_sol_out: parsed.min_sol_out,
+      input_amount: requestedAmount,
+      target_price_usd: requestedTarget,
+      min_sol_out: Number.isFinite(minSolOut) && minSolOut > 0 ? minSolOut : undefined,
+      desired_sol_amount:
+        Number.isFinite(desiredSolOut) && desiredSolOut > 0 ? desiredSolOut : undefined,
+      client_order_id:
+        Number.isFinite(requestClientOrder) && requestClientOrder > 0 ? Math.floor(requestClientOrder) : undefined,
+      recipient: requestedRecipient || recipient,
+      expires_at: parsed.expires_at || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      max_usdc_in: Number.isFinite(requestMaxUsdc) && requestMaxUsdc > 0 ? requestMaxUsdc : undefined,
+      max_oracle_age_seconds: Number.isFinite(requestOracleAge) && requestOracleAge > 0 ? requestOracleAge : undefined,
+      max_confidence_bps: Number.isFinite(requestConfidence) && requestConfidence > 0 ? requestConfidence : undefined,
+      execution_mode: 'create_order_and_deposit',
     };
   } catch {
     await writeSSE(writer, encoder, 'error', {
@@ -505,17 +549,12 @@ async function handleConditionalBuyToolCall(
     return;
   }
 
-  const quote = simulateBuySolQuote(toolArgs);
-  const decision = evaluateConditionalBuy(toolArgs, quote);
-
-  if (decision.decision === 'WAIT_CONDITION_NOT_MET') {
-    await writeSSE(writer, encoder, 'token', {
-      content: `Tu condición de compra aún no se cumple. Precio SOL actual simulado: ${quote.sol_usd_price} USD, target: ${toolArgs.target_price_usd} USD.`,
-    });
-    await writeSSE(writer, encoder, 'done', { session_id: sessionId });
-    await writer.close();
-    return;
-  }
+  const quoteUsdPrice = Math.max(1, Number(toolArgs.target_price_usd));
+  const proposalPayload = toConditionalBuyProposalPayload(toolArgs, session.userAddress || '', quoteUsdPrice);
+  const decision = evaluateConditionalBuy({
+    ...toolArgs,
+    desired_sol_amount: proposalPayload.desired_sol_amount,
+  });
 
   if (decision.decision === 'REJECT') {
     await writeSSE(writer, encoder, 'error', {
@@ -533,12 +572,15 @@ async function handleConditionalBuyToolCall(
     type: 'function_call',
     function: {
       name: 'conditional_buy_sol',
-      params: toolArgs,
+      params: {
+        ...toolArgs,
+        ...proposalPayload,
+      },
     },
     display: {
-      summary: `Comprar SOL con ${toolArgs.input_amount} USDC si SOL <= ${toolArgs.target_price_usd} USD`,
+      summary: `Orden condicional para ${proposalPayload.desired_sol_amount} SOL si SOL <= ${toolArgs.target_price_usd} USD`,
       fee_usd: 0.01,
-      provider: 'simulated_devnet_market',
+      provider: 'conditional_escrow_program',
     },
     risk: {
       score: 35,
@@ -549,7 +591,7 @@ async function handleConditionalBuyToolCall(
       ],
     },
     execution: {
-      mode: 'phantom_execute_then_optional_backend_proof',
+      mode: 'phantom_sign_and_send',
       network: DEFAULT_SOLANA_NETWORK,
       expires_at: new Date(getProposalExpiry()).toISOString(),
       expected_user_address: session.userAddress ?? undefined,
@@ -564,8 +606,7 @@ async function handleConditionalBuyToolCall(
       toolName: 'conditional_buy_sol',
       toolArgs: {
         ...toolArgs,
-        oracle_feed_pubkey: oracleFeed,
-        simulated_quote: quote,
+        ...proposalPayload,
       },
       toolResult: {
         status: 'prepared',
@@ -800,14 +841,122 @@ async function handleFunctionApprove(request: {
 
   if (toolName === 'conditional_buy_sol') {
     const buyArgs = toolArgs as ConditionalBuySolParams;
+    if (!session.userAddress) {
+      clearPendingProposal(request.session_id);
+      return jsonResponse({ error: { code: 'no_wallet', message: 'No wallet connected in session' } }, { status: 400 });
+    }
+    if (proposal.expectedUserAddress && proposal.expectedUserAddress !== session.userAddress) {
+      updateSession(request.session_id, {
+        pendingProposal: {
+          ...proposal,
+          state: 'failed',
+        },
+      });
+      return jsonResponse(
+        { error: { code: 'wallet_mismatch', message: 'Connected wallet does not match expected wallet for this proposal.' } },
+        { status: 400 },
+      );
+    }
+
+    let unsignedCreateTx: { txBase64: string; blockhash: string; lastValidBlockHeight: number; orderPda: string; clientOrderId: number };
+    try {
+      const orderPayloadCandidate = toConditionalBuyProposalPayload(
+        {
+          input_token: 'USDC',
+          input_amount: buyArgs.input_amount,
+          target_price_usd: buyArgs.target_price_usd,
+          min_sol_out: buyArgs.min_sol_out,
+          desired_sol_amount: buyArgs.desired_sol_amount,
+          max_usdc_in: buyArgs.max_usdc_in,
+          max_oracle_age_seconds: buyArgs.max_oracle_age_seconds,
+          max_confidence_bps: buyArgs.max_confidence_bps,
+          recipient: buyArgs.recipient,
+          expires_at: buyArgs.expires_at,
+          oracle_feed_pubkey: buyArgs.oracle_feed_pubkey,
+          client_order_id: buyArgs.client_order_id,
+          execution_mode: 'create_order_and_deposit',
+        },
+        session.userAddress,
+        Number(buyArgs.target_price_usd) || 1,
+      );
+
+      const desiredSolAmount = orderPayloadCandidate.desired_sol_amount;
+      if (!Number.isFinite(desiredSolAmount) || desiredSolAmount <= 0) {
+        throw new Error('Cannot resolve desired SOL amount');
+      }
+
+      const maxUsdcIn = buyArgs.max_usdc_in || buyArgs.input_amount;
+      const expiresAtUnix = typeof buyArgs.expires_at === 'string'
+        ? Math.floor(new Date(buyArgs.expires_at).getTime() / 1000)
+        : orderPayloadCandidate.expires_at_unix;
+
+      const orderPayload: ConditionalBuyOrderTxInput = {
+        userAddress: session.userAddress,
+        desired_sol_amount: desiredSolAmount,
+        desired_sol_lamports: toConditionalBuyProposalPayload(
+          {
+            input_token: 'USDC',
+            input_amount: buyArgs.input_amount,
+            target_price_usd: buyArgs.target_price_usd,
+            min_sol_out: buyArgs.min_sol_out,
+            desired_sol_amount: buyArgs.desired_sol_amount,
+            max_usdc_in: buyArgs.max_usdc_in,
+            max_oracle_age_seconds: buyArgs.max_oracle_age_seconds,
+            max_confidence_bps: buyArgs.max_confidence_bps,
+            recipient: buyArgs.recipient,
+            expires_at: buyArgs.expires_at,
+            oracle_feed_pubkey: buyArgs.oracle_feed_pubkey,
+            client_order_id: buyArgs.client_order_id,
+            execution_mode: 'create_order_and_deposit',
+          },
+          session.userAddress,
+          Number(buyArgs.target_price_usd) || 1,
+        ).desired_sol_lamports,
+        max_usdc_in,
+        target_price_usd: buyArgs.target_price_usd,
+        recipient: buyArgs.recipient || session.userAddress,
+        expires_at_unix: expiresAtUnix,
+        client_order_id: buyArgs.client_order_id || Math.max(1, Math.floor(Date.now())),
+        oracle_feed_pubkey: buyArgs.oracle_feed_pubkey || process.env.PYTH_SOL_USD_FEED || '',
+        max_oracle_age_seconds: buyArgs.max_oracle_age_seconds || 120,
+        max_confidence_bps: buyArgs.max_confidence_bps || 500,
+      };
+      unsignedCreateTx = await buildConditionalBuyCreateOrderTx(orderPayload);
+    } catch (e) {
+      updateSession(request.session_id, {
+        pendingProposal: {
+          ...proposal,
+          state: 'failed',
+        },
+      });
+      return jsonResponse(
+        {
+          error: {
+            code: 'conditional_order_build_failed',
+            message: e instanceof Error ? e.message : 'Failed to build conditional order transaction',
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    const shortRecipient = `${(buyArgs.recipient || session.userAddress).slice(0, 4)}...${(buyArgs.recipient || session.userAddress).slice(-4)}`;
+
     const response: {
       messages: AgentMessage[];
       proposal_state: { state: 'awaiting_signature'; expires_at: string };
+      transaction?: {
+        format: 'base64_versioned_transaction';
+        unsigned_tx_base64: string;
+        recent_blockhash: string;
+        last_valid_block_height: number;
+        network: 'devnet' | 'mainnet-beta';
+      };
     } = {
       messages: [
         {
           type: 'text',
-          content: `Aprobación recibida para compra condicional (${buyArgs.input_amount} USDC, target ${buyArgs.target_price_usd} USD). Ejecuta la operación en Phantom y envía tx_signature para completarla.`,
+          content: `Aprobación recibida para orden condicional (objetivo ${buyArgs.desired_sol_amount || buyArgs.min_sol_out || '—'} SOL, recipient ${shortRecipient}, max ${buyArgs.max_usdc_in || buyArgs.input_amount} USDC). Ejecuta la transacción en Phantom y luego confirma la propuesta.`,
           timestamp: now(),
         },
       ],
@@ -815,12 +964,25 @@ async function handleFunctionApprove(request: {
         state: 'awaiting_signature',
         expires_at: proposal.expiresAt ? new Date(proposal.expiresAt).toISOString() : now(),
       },
+      transaction: {
+        format: 'base64_versioned_transaction',
+        unsigned_tx_base64: unsignedCreateTx.txBase64,
+        recent_blockhash: unsignedCreateTx.blockhash,
+        last_valid_block_height: unsignedCreateTx.lastValidBlockHeight,
+        network: proposal.network,
+      },
     };
 
     updateSession(request.session_id, {
       pendingProposal: {
         ...proposal,
         state: 'awaiting_signature',
+        recentBlockhash: unsignedCreateTx.blockhash,
+        lastValidBlockHeight: unsignedCreateTx.lastValidBlockHeight,
+        toolArgs: {
+          ...(proposal.toolArgs as Record<string, unknown>),
+          order_pda: unsignedCreateTx.orderPda,
+        },
       },
     });
     return jsonResponse(response, { status: 200 });
@@ -950,10 +1112,14 @@ async function handleFunctionResult(request: {
 
   const pendingProposal = session.pendingProposal;
   if (pendingProposal.toolName === 'conditional_buy_sol' && request.status === 'confirmed') {
+    const expectedOrder = typeof (pendingProposal.toolArgs as { order_pda?: string }).order_pda === 'string'
+      ? ((pendingProposal.toolArgs as { order_pda?: string }).order_pda as string)
+      : undefined;
     const proof = await verifyOracleExecutionTx({
       execute_tx_signature: request.tx_signature,
       expected_signer: pendingProposal.expectedUserAddress || session.userAddress || undefined,
       expected_network: pendingProposal.network,
+      expected_order_pda: expectedOrder,
     });
 
     if (!proof.ok) {

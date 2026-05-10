@@ -157,6 +157,8 @@ export type TxHistoryItem = {
   status: 'success' | 'failed';
   timestamp: string;
   summary: string;
+  amount?: number;
+  amount_symbol?: string;
   amount_usd?: number;
   explorer_url: string;
 };

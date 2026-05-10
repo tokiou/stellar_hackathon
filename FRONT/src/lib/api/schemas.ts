@@ -145,6 +145,8 @@ export const TxHistoryItemSchema = z.object({
   status: z.enum(['success', 'failed']),
   timestamp: z.string(),
   summary: z.string(),
+  amount: z.number().optional(),
+  amount_symbol: z.string().optional(),
   amount_usd: z.number().optional(),
   explorer_url: z.string(),
 });
