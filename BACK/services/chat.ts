@@ -579,7 +579,6 @@ async function handleConditionalBuyToolCall(
     },
     display: {
       summary: `Orden condicional para ${proposalPayload.desired_sol_amount} SOL si SOL <= ${toolArgs.target_price_usd} USD`,
-      fee_usd: 0.01,
       provider: 'conditional_escrow_program',
     },
     risk: {
