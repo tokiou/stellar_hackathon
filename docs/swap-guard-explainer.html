@@ -292,6 +292,11 @@
           <p class="card-meta">Usado por <code>app/api/*</code>.</p>
         </div>
         <div class="card col-3">
+          <div class="card-title">infra/keeper</div>
+          <p>Supabase Postgres para cola auditable y Upstash QStash para invocar workers serverless.</p>
+          <p class="card-meta">Usado por órdenes condicionales recurrentes.</p>
+        </div>
+        <div class="card col-3">
           <div class="card-title">docs/</div>
           <p>Referencia transversal, specs por feature y documentación de decisiones.</p>
           <p class="card-meta">Cada feature vive en <code>docs/&lt;feature&gt;/</code>.</p>
@@ -309,6 +314,8 @@ app/api/*/route.ts  ── borde Next/Vercel
 back/services/*     ── providers, agente, RPC, guardrails
   │
   ├─ Solana RPC / Pyth / Orca / Helius / Birdeye / Jupiter
+  ├─ Supabase Postgres: estado, locks, historial e idempotencia
+  ├─ Upstash QStash: schedules firmados, retries y ticks serverless
   └─ Programas devnet: AgentActionGuard + ConditionalEscrowBuy</pre>
     </section>
 
@@ -338,6 +345,11 @@ back/services/*     ── providers, agente, RPC, guardrails
             <td><strong>Smart contracts</strong><br><code>back/solana</code></td>
             <td>Enforcement verificable: approvals, políticas, condiciones y checks on-chain.</td>
             <td>Reemplazar todos los checks off-chain; se usan cuando hace falta garantía no bypassable.</td>
+          </tr>
+          <tr>
+            <td><strong>Keeper infra</strong><br><code>Supabase + QStash</code></td>
+            <td>Persistir órdenes condicionales, tomar locks, auditar attempts e invocar el worker periódico.</td>
+            <td>Ser fuente de verdad financiera: el contrato on-chain valida antes de ejecutar.</td>
           </tr>
         </tbody>
       </table>
@@ -373,8 +385,8 @@ back/services/*     ── providers, agente, RPC, guardrails
         </div>
         <div class="card col-4">
           <div class="card-title">Orden condicional recurrente</div>
-          <p>Ejemplo: “comprame SOL cuando baje de 130 USD”. Usa condición, escrow, oracle y keeper bajo reglas de riesgo.</p>
-          <p class="card-meta">Docs: <code>devnet-conditional-escrow-buy-sol/</code></p>
+          <p>Ejemplo: “comprame SOL cuando baje de 130 USD”. Usa escrow on-chain, oráculo Pyth y un keeper persistente con Supabase + QStash.</p>
+          <p class="card-meta">Docs: <code>devnet-conditional-escrow-buy-sol/</code> y <code>conditional-order-db-keeper/</code></p>
         </div>
       </div>
     </section>
@@ -389,6 +401,7 @@ back/services/*     ── providers, agente, RPC, guardrails
         <tbody>
           <tr><td><code>/api/chat</code></td><td><span class="badge guard">guardrail</span></td><td><code>back/services/chat.ts</code></td><td>Chat, proposals, approve/reject, execution result e historial.</td></tr>
           <tr><td><code>/api/conditional-orders*</code></td><td><span class="badge devnet">devnet</span></td><td><code>conditionalOrders.ts</code></td><td>Lista, detalle y trigger manual de órdenes condicionales.</td></tr>
+          <tr><td><code>/api/cron/conditional-orders</code></td><td><span class="badge guard">keeper</span></td><td><code>conditionalOrders.ts</code> + DB</td><td>Endpoint propuesto para QStash: verifica firma, toma locks en Supabase y procesa órdenes vencidas.</td></tr>
           <tr><td><code>/api/wallet/balances</code></td><td><span class="badge live">live/devnet</span></td><td><code>walletHoldings.ts</code></td><td>Balances nativos y SPL normalizados.</td></tr>
           <tr><td><code>/api/wallet/transactions</code></td><td><span class="badge live">provider</span></td><td><code>transactionHistory.ts</code></td><td>Historial de transacciones.</td></tr>
           <tr><td><code>/api/quotes/usdc-sol</code></td><td><span class="badge devnet">Orca</span></td><td><code>priceQuote.ts</code></td><td>Quote devnet USDC/SOL.</td></tr>
@@ -414,6 +427,22 @@ back/services/*     ── providers, agente, RPC, guardrails
           <p class="card-meta">Workspace: <code>back/solana/conditional-escrow-buy/</code></p>
         </div>
       </div>
+      <h3>Keeper condicional — ejecución sin procesos residentes</h3>
+      <pre>Usuario crea orden con Phantom
+  └─ Orden/escrow queda on-chain
+      └─ Backend registra conditional_orders en Supabase
+          └─ QStash invoca /api/cron/conditional-orders cada 30s
+              ├─ Worker toma batch con lock + TTL
+              ├─ Refresca estado on-chain y precio Pyth
+              ├─ Si no cumple: agenda next_check_at
+              └─ Si cumple: intenta execute_order
+
+El contrato valida nuevamente condición, staleness, expiración y estado.
+La DB coordina; Solana decide.</pre>
+      <div class="callout good">
+        <strong>Decisión de scheduling:</strong> usar dos schedules QStash por minuto: uno inmediato y otro con <code>Upstash-Delay: 30s</code>. Así se logra cadencia de 30 segundos sin <code>setInterval</code> ni worker residente en Vercel.
+      </div>
+
       <h3>Swap Guard Oracle — caso de protección de precio</h3>
       <pre>Usuario aprueba swap
   └─ Backend prepara TX con guardrails
@@ -436,6 +465,7 @@ Si la desviación excede el umbral:
         <tbody>
           <tr><td><span class="badge live">live/proxy</span></td><td>Datos consultados server-side a providers o RPC.</td><td>Birdeye, Helius, Jupiter, wallet transactions.</td></tr>
           <tr><td><span class="badge devnet">devnet</span></td><td>Funcionalidad real pero apuntada a red de demo Solana devnet.</td><td>Conditional orders, Orca devUSDC/SOL, programas Anchor.</td></tr>
+          <tr><td><span class="badge guard">keeper</span></td><td>Infra operacional off-chain para no depender de memoria del proceso.</td><td>Supabase como queue table; QStash como scheduler con firma y retries.</td></tr>
           <tr><td><span class="badge mock">mock/demo</span></td><td>Datos estáticos para UX; no usar para decisiones de riesgo.</td><td><code>/api/prices</code>, <code>/api/network/status</code>, <code>/api/wallet/allocation</code>.</td></tr>
         </tbody>
       </table>
@@ -450,6 +480,7 @@ Si la desviación excede el umbral:
             <li><code>docs/api-reference.md</code>: cambia una API.</li>
             <li><code>docs/development-workflow.md</code>: cambia script, test, alias o setup.</li>
             <li><code>docs/onchain-deployments.md</code>: cambia dirección/programa/devnet.</li>
+            <li><code>docs/conditional-order-db-keeper/proposal.md</code>: cambia la arquitectura de DB/cron/keeper.</li>
             <li><code>docs/README.md</code>: cambia el índice o estado de docs.</li>
           </ul>
         </div>
@@ -473,6 +504,7 @@ Si la desviación excede el umbral:
             <li>¿La acción crítica pasa por guardrails?</li>
             <li>¿El frontend solo consume <code>/api/*</code>?</li>
             <li>¿Los secrets quedan en backend/Vercel?</li>
+            <li>¿QStash/Supabase se usan solo server-side y con firma/locks?</li>
             <li>¿Hay contrato Zod/tipos si lo consume la UI?</li>
           </ul>
         </div>

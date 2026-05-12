@@ -29,7 +29,7 @@ Este directorio concentra documentación transversal y specs por feature. Si est
 | `phantom-external-transaction-contracts.md` | activo/referencia | Contratos y flujo de transacciones externas con Phantom. |
 | `token-risk-guard-backend.md` | referencia | Notas de guardrails/riesgo de token en backend. |
 | `simulated-swap-safety-guard.md` | histórico | Documento histórico del guardrail de swap simulado. |
-| `swap-guard-explainer.html` | referencia visual | Explainer HTML del guardrail de swap. |
+| `swap-guard-explainer.html` | referencia visual | Explainer HTML de arquitectura, guardrails, APIs, on-chain y keeper condicional. |
 | `compass_artifact_*.md` | artifact histórico | Mantener como evidencia/contexto; no implementar desde ahí sin validar. |
 
 ## Specs por feature
@@ -40,6 +40,7 @@ Este directorio concentra documentación transversal y specs por feature. Si est
 | Agent quotes and holdings | `agent-quotes-and-holdings/` |
 | Backend chat session history | `backend-chat-session-history/` |
 | Chat session history | `chat-session-history/` |
+| Conditional order DB keeper | `conditional-order-db-keeper/` |
 | Devnet conditional escrow buy SOL | `devnet-conditional-escrow-buy-sol/` |
 | Phantom direct connection | `phantom-direct-connection/` |
 | Transaction history | `transaction-history/` |
