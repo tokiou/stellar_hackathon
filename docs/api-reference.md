@@ -7,6 +7,9 @@ Esta es la referencia transversal de las rutas internas `app/api/*`. El frontend
 | Ruta | Método | Modo datos | Servicio dueño | Uso principal |
 |---|---:|---|---|---|
 | `/api/chat` | `POST` | live/mixed | `back/services/chat.ts` | Chat agentic, proposals, approvals, execution results e historial. |
+| `/api/auth/dynamic/session` | `POST` | live/auth | `back/services/auth/*` | Convierte wallet Dynamic verificada en sesión propia httpOnly. |
+| `/api/auth/session` | `GET` | live/auth | `back/services/auth/appSession.ts` | Devuelve identidad wallet autenticada de la sesión app-side. |
+| `/api/auth/logout` | `POST` | live/auth | `back/services/auth/appSession.ts` | Limpia cookie de sesión app-side. |
 | `/api/conditional-orders` | `GET`, `POST` | live/devnet | `back/services/conditionalOrders.ts` | Lista/refresca órdenes condicionales por wallet. |
 | `/api/conditional-orders/[orderPda]` | `GET`, `POST` | live/devnet | `back/services/conditionalOrders.ts` | Detalle de orden y trigger manual de ejecución. |
 | `/api/quotes/usdc-sol` | `GET` | live/devnet | `back/services/priceQuote.ts` | Quote devnet USDC/SOL vía Orca. |
@@ -47,7 +50,27 @@ Payloads soportados por el cliente actual:
 | `function_approve` | Aprobar una proposal pendiente. |
 | `function_reject` | Rechazar una proposal pendiente. |
 | `function_result` | Informar resultado de firma/ejecución al backend. |
-| `history_request` | Recuperar contexto/historial de conversación. |
+| `get_history` | Recuperar contexto/historial de conversación. |
+
+Cuando `DYNAMIC_ENVIRONMENT_ID`, `APP_SESSION_SECRET`, `REQUIRE_APP_SESSION=true` o producción están activos, `/api/chat` exige sesión app-side para acciones sensibles. `user_address` puede viajar como hint/compatibilidad, pero la identidad autorizada sale de la cookie httpOnly emitida por `/api/auth/dynamic/session`.
+
+### `POST /api/auth/dynamic/session`
+
+Crea una sesión propia de Compass vinculada a una wallet Dynamic activa.
+
+- Cliente: `front/src/lib/api/client.ts#createDynamicAppSession`
+- Backend: `back/services/auth/appSession.ts`, `back/services/auth/dynamic.ts`
+- Cookie: `compass_app_session`, httpOnly, SameSite=Lax.
+- Request: `dynamicUserId`, `walletAddress`, `walletType`, `walletProvider`, `dynamicAuthToken`.
+- Validación: verifica JWT Dynamic por JWKS cuando hay Dynamic env/token; en desarrollo sin token usa modo `development` para smoke local.
+
+### `GET /api/auth/session`
+
+Devuelve la identidad wallet autenticada si la cookie app-side es válida. Responde `401 session_not_found` si no hay sesión o expiró.
+
+### `POST /api/auth/logout`
+
+Limpia la cookie app-side. El frontend lo llama al desconectar/cambiar wallet Dynamic.
 
 ### `GET /api/conditional-orders`
 

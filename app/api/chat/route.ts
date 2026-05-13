@@ -15,5 +15,5 @@ export async function POST(request: Request) {
     );
   }
 
-  return proxyAgenticChat(body);
+  return proxyAgenticChat(body, { request });
 }

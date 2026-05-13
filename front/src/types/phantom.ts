@@ -98,17 +98,6 @@ export type PhantomEvent = keyof PhantomEventPayloads;
 
 type PhantomEventHandler<TEvent extends PhantomEvent> = (args: PhantomEventPayloads[TEvent]) => void;
 
-/**
- * Window interface extension for Phantom
- */
-declare global {
-  interface Window {
-    phantom?: {
-      solana?: PhantomProvider;
-    };
-  }
-}
-
 export type PhantomExecutionResult = {
   tx_signature: string;
 };
@@ -137,7 +126,12 @@ export function getPhantomProvider(): PhantomProvider | null {
     return null;
   }
 
-  const provider = window.phantom?.solana;
+  const walletWindow = window as unknown as Window & {
+    phantom?: {
+      solana?: PhantomProvider;
+    };
+  };
+  const provider = walletWindow.phantom?.solana;
 
   if (provider?.isPhantom) {
     return provider;

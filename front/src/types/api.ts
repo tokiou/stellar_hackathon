@@ -205,18 +205,19 @@ export type SessionHistoryMessage =
 
 export type AgentMessageRequest =
   | { type: 'user_message'; content: string; session_id?: string; user_address?: string; user_threshold_usd?: number }
-  | { type: 'function_approve'; session_id: string; user_address?: string }
+  | { type: 'function_approve'; session_id: string; action_hash?: string; accept_risk?: boolean; user_address?: string }
   | { type: 'function_result'; session_id: string; tx_signature: string; status: 'submitted' | 'confirmed' | 'failed'; error_message?: string; user_address?: string }
-  | { type: 'function_reject'; session_id: string; reason?: string; user_address?: string };
+  | { type: 'function_reject'; session_id: string; reason?: string; user_address?: string }
+  | { type: 'get_history'; session_id: string; user_address?: string };
 
 export type AgentMessageResponse = {
   messages: AgentMessage[];
   proposal_state?: {
-    state: 'awaiting_signature';
-    expires_at: string;
+    state: 'awaiting_signature' | 'guard_rejected_awaiting_bypass' | 'cancelled';
+    expires_at?: string;
   };
   transaction?: {
-    format: 'base64_versioned_transaction';
+    format: 'base64_versioned_transaction' | 'base64_legacy_transaction';
     unsigned_tx_base64: string;
     recent_blockhash: string;
     last_valid_block_height: number;

@@ -642,9 +642,19 @@ export const useChatStore = create<ChatStore>()(
 
         getConversationList: () => {
           const state = get();
-          return Object.values(state.conversationsById).sort((a, b) => {
-            return toIso(b.updatedAt) - toIso(a.updatedAt);
-          });
+          const activeWalletAddress = normalizeWalletAddress(state.activeWalletAddress);
+          if (!activeWalletAddress) return [];
+
+          return Object.values(state.conversationsById)
+            .filter((conversation) => {
+              return (
+                normalizeWalletAddress(conversation.lastWalletAddress) === activeWalletAddress ||
+                normalizeWalletAddress(conversation.walletAddressAtCreation) === activeWalletAddress
+              );
+            })
+            .sort((a, b) => {
+              return toIso(b.updatedAt) - toIso(a.updatedAt);
+            });
         },
 
         getActiveConversationReadOnlyReason: () => {
@@ -941,11 +951,15 @@ export const useChatStore = create<ChatStore>()(
         },
 
         clearHistory: () => {
+          const state = get();
+          const activeConversation = state.activeConversationId ? state.conversationsById[state.activeConversationId] : null;
+          const walletAddress = state.activeWalletAddress ?? activeConversation?.lastWalletAddress ?? null;
           const conversation = syncConversationMetadata(
-            makeConversation({ walletAddress: get().activeWalletAddress }),
-            get().activeWalletAddress
+            makeConversation({ walletAddress }),
+            walletAddress
           );
           set({
+            activeWalletAddress: walletAddress,
             activeConversationId: conversation.id,
             conversationsById: { [conversation.id]: conversation },
             conversationOrder: [conversation.id],

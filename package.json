@@ -20,6 +20,9 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",
+    "@dynamic-labs/ethereum": "^4.83.0",
+    "@dynamic-labs/sdk-react-core": "^4.83.0",
+    "@dynamic-labs/solana": "^4.83.0",
     "@hookform/resolvers": "^3.9.1",
     "@langchain/core": "^0.3.29",
     "@langchain/langgraph": "^0.2.39",

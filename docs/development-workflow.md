@@ -44,6 +44,17 @@ Definidos en `tsconfig.json` y replicados en Vitest:
 
 Regla práctica: no importes `back/*` desde componentes/hook browser-side. El cruce permitido es `front -> /api/* -> app/api -> back/services`.
 
+## Dynamic wallet auth local setup
+
+Para probar la migración wallet-first con Dynamic:
+
+1. Configurá `NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID` en `.env.local` con el Environment ID público de Dynamic.
+2. Configurá `APP_SESSION_SECRET` para activar validación de sesión app-side en backend local.
+3. Opcional: configurá `DYNAMIC_ENVIRONMENT_ID` para verificar JWT Dynamic vía JWKS server-side.
+4. Corré `npm run dev` y conectá una wallet Solana externa o embedded desde el modal Dynamic.
+
+Sin `NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID`, el provider Dynamic queda deshabilitado y `useWallet` conserva el fallback Phantom para desarrollo legacy.
+
 ## Tests
 
 | Config | Include | Entorno |

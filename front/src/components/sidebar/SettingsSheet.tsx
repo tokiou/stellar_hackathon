@@ -50,12 +50,27 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
           </section>
 
           <section className="rounded-2xl border border-outline p-4">
-            <p className="text-sm font-semibold text-on-surface">Account</p>
+            <p className="text-sm font-semibold text-on-surface">Wallet</p>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              {wallet.walletType === 'embedded'
+                ? 'Embedded wallet managed by Dynamic.'
+                : wallet.walletType === 'external'
+                  ? `External wallet${wallet.walletProvider ? ` via ${wallet.walletProvider}` : ''}.`
+                  : 'Connect or create a wallet to use guarded actions.'}
+            </p>
             <p className="mt-2 break-all font-mono text-xs text-on-surface-variant">{wallet.address ?? 'Not connected'}</p>
+            {wallet.walletType === 'embedded' ? (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Never share your private key. Anyone with the exported key controls this wallet and its funds.
+              </p>
+            ) : null}
             <div className="mt-4 flex gap-2">
-              {wallet.exportPrivateKey ? (
-                <button onClick={() => wallet.exportPrivateKey?.()} className="rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-on-primary">
-                  Export private key
+              {wallet.exportWallet ? (
+                <button
+                  onClick={() => wallet.exportWallet?.()}
+                  className="rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-on-primary"
+                >
+                  Export embedded wallet
                 </button>
               ) : null}
               <button onClick={() => wallet.disconnect?.()} className="rounded-xl border border-outline px-3 py-2 text-sm font-semibold text-on-surface">
