@@ -50,9 +50,15 @@ function makeHistoryState(overrides: Record<string, unknown> = {}) {
 
 function makeWalletState() {
   return {
+    isAuthenticated: true,
     isConnected: true,
     isConnecting: false,
+    isResolved: true,
     address: '11111111111111111111111111111111',
+    walletType: 'external' as const,
+    walletProvider: 'phantom',
+    dynamicUserId: undefined,
+    authStatus: 'connected' as const,
     isBalancesLoading: false,
     balances: undefined,
     walletError: undefined,
@@ -60,6 +66,7 @@ function makeWalletState() {
     connect: vi.fn(),
     disconnect: vi.fn(),
     exportPrivateKey: undefined,
+    exportWallet: undefined,
     signAndSendPreparedTransaction: vi.fn(),
     allocation: [],
     highlightBalances: {},

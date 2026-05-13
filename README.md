@@ -10,6 +10,7 @@ La idea es tener el código separado para trabajar ordenadamente, pero que a niv
 |---|---|
 | APIs internas y contratos | `docs/api-reference.md` |
 | Scripts, tests, aliases y workflow | `docs/development-workflow.md` |
+| Dynamic wallet auth | `docs/dynamic-wallet-auth/` |
 | Direcciones devnet/on-chain | `docs/onchain-deployments.md` |
 | Índice de specs por feature | `docs/README.md` |
 | Frontend | `front/README.md` |

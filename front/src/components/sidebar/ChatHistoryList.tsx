@@ -9,15 +9,21 @@ export function ChatHistoryList() {
   const activeConversationId = useChatStore((state) => state.activeConversationId);
   const conversationOrder = useChatStore((state) => state.conversationOrder);
   const conversationsById = useChatStore((state) => state.conversationsById);
+  const activeWalletAddress = useChatStore((state) => state.activeWalletAddress);
   const clearHistory = useChatStore((state) => state.clearHistory);
   const startNewConversation = useChatStore((state) => state.startNewConversation);
   const selectConversation = useChatStore((state) => state.selectConversation);
   const deleteConversation = useChatStore((state) => state.deleteConversation);
   const conversations = useMemo(() => {
+    const walletAddress = wallet.address || activeWalletAddress;
     return conversationOrder
       .map((id) => conversationsById[id])
-      .filter((conversation): conversation is PersistedConversation => Boolean(conversation));
-  }, [conversationOrder, conversationsById]);
+      .filter((conversation): conversation is PersistedConversation => {
+        if (!conversation) return false;
+        if (!walletAddress) return false;
+        return conversation.lastWalletAddress === walletAddress || conversation.walletAddressAtCreation === walletAddress;
+      });
+  }, [activeWalletAddress, conversationOrder, conversationsById, wallet.address]);
 
   return (
     <div className="rounded-2xl border border-outline bg-surface p-3 shadow-sm">

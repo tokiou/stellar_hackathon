@@ -80,10 +80,20 @@ import { fetchWalletHoldings } from './walletHoldings';
 import { getUsdcSolQuote } from './priceQuote';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import {
+  getAppSessionFromRequest,
+  isAppSessionRequired,
+  type AuthenticatedWalletIdentity,
+} from './auth/appSession';
 
 // ============================================================================
 // Types - Unified Contract
 // ============================================================================
+
+type ChatAuthContext = {
+  identity: AuthenticatedWalletIdentity | null;
+  requireAppSession: boolean;
+};
 
 type ChatRequest =
   | {
@@ -472,6 +482,59 @@ async function persistSessionBestEffort(sessionId: string): Promise<void> {
 function hasSessionWalletMismatch(session: SessionState, userAddress?: string): boolean {
   const normalizedUserAddress = userAddress?.trim();
   return Boolean(session.userAddress && (!normalizedUserAddress || session.userAddress !== normalizedUserAddress));
+}
+
+function getEffectiveWalletAddress(auth: ChatAuthContext, userAddress?: string): string | undefined {
+  return auth.identity?.walletAddress || userAddress?.trim() || undefined;
+}
+
+function authRequiredResponse(): Response {
+  return jsonResponse(
+    { error: { code: 'session_not_authenticated', message: 'A verified app session is required for this action' } },
+    { status: 401 },
+  );
+}
+
+function walletMismatchResponse(): Response {
+  return jsonResponse(
+    { error: { code: 'wallet_mismatch', message: 'The request wallet does not match the authenticated wallet' } },
+    { status: 403 },
+  );
+}
+
+function hasAuthenticatedRequestMismatch(auth: ChatAuthContext, userAddress?: string): boolean {
+  const normalizedUserAddress = userAddress?.trim();
+  return Boolean(auth.identity && normalizedUserAddress && normalizedUserAddress !== auth.identity.walletAddress);
+}
+
+function authorizeSessionAccess(
+  session: SessionState,
+  requestUserAddress: string | undefined,
+  auth: ChatAuthContext,
+): Response | null {
+  if (hasAuthenticatedRequestMismatch(auth, requestUserAddress)) {
+    return walletMismatchResponse();
+  }
+
+  if (auth.identity) {
+    return session.userAddress && session.userAddress !== auth.identity.walletAddress ? sessionNotFoundResponse() : null;
+  }
+
+  if (auth.requireAppSession) {
+    return authRequiredResponse();
+  }
+
+  return hasSessionWalletMismatch(session, requestUserAddress) ? sessionNotFoundResponse() : null;
+}
+
+function identitySessionMetadata(identity: AuthenticatedWalletIdentity | null) {
+  if (!identity) return undefined;
+  return {
+    dynamicUserId: identity.dynamicUserId,
+    walletType: identity.walletType,
+    walletProvider: identity.walletProvider,
+    verifiedAt: identity.verifiedAt,
+  };
 }
 
 function sessionNotFoundResponse(): Response {
@@ -1125,7 +1188,7 @@ async function ensureWalletSafetyAttestation(params: {
 // Main Entry Point
 // ============================================================================
 
-export async function proxyAgenticChat(body: unknown): Promise<Response> {
+export async function proxyAgenticChat(body: unknown, options?: { request?: Request }): Promise<Response> {
   const apiKey = getEnv('OPENAI_API_KEY');
   if (!apiKey) {
     return jsonResponse({ error: { code: 'config_error', message: 'OPENAI_API_KEY not configured' } }, { status: 503 });
@@ -1137,18 +1200,23 @@ export async function proxyAgenticChat(body: unknown): Promise<Response> {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'Missing request type' } }, { status: 400 });
   }
 
+  const auth: ChatAuthContext = {
+    identity: options?.request ? getAppSessionFromRequest(options.request) : null,
+    requireAppSession: isAppSessionRequired(),
+  };
+
   // Route based on request type
   switch (request.type) {
     case 'user_message':
-      return handleUserMessage(request);
+      return handleUserMessage(request, auth);
     case 'get_history':
-      return handleGetHistory(request);
+      return handleGetHistory(request, auth);
     case 'function_approve':
-      return handleFunctionApprove(request);
+      return handleFunctionApprove(request, auth);
     case 'function_result':
-      return handleFunctionResult(request);
+      return handleFunctionResult(request, auth);
     case 'function_reject':
-      return handleFunctionReject(request);
+      return handleFunctionReject(request, auth);
     default:
       return jsonResponse({ error: { code: 'invalid_type', message: 'Unknown request type' } }, { status: 400 });
   }
@@ -1158,14 +1226,13 @@ async function handleGetHistory(request: {
   type: 'get_history';
   session_id: string;
   user_address?: string;
-}): Promise<Response> {
+}, auth: ChatAuthContext): Promise<Response> {
   const session = await getSessionWithExternalFallback(request.session_id);
   if (!session) {
     return sessionNotFoundResponse();
   }
-  if (hasSessionWalletMismatch(session, request.user_address)) {
-    return sessionNotFoundResponse();
-  }
+  const authorizationError = authorizeSessionAccess(session, request.user_address, auth);
+  if (authorizationError) return authorizationError;
 
   const pendingProposalMessage = session.pendingProposal
     ? session.pendingProposal.proposalMessage ??
@@ -1197,11 +1264,19 @@ async function handleUserMessage(request: {
   session_id?: string;
   user_address?: string;
   user_threshold_usd?: number;
-}): Promise<Response> {
+}, auth: ChatAuthContext): Promise<Response> {
   if (!request.content?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'Content is required' } }, { status: 400 });
   }
 
+  if (hasAuthenticatedRequestMismatch(auth, request.user_address)) {
+    return walletMismatchResponse();
+  }
+  if (auth.requireAppSession && !auth.identity) {
+    return authRequiredResponse();
+  }
+
+  const effectiveUserAddress = getEffectiveWalletAddress(auth, request.user_address);
   const { stream, writer, encoder } = createSSEStream();
 
   (async () => {
@@ -1209,19 +1284,21 @@ async function handleUserMessage(request: {
       // Get or create session
       let sessionId = request.session_id?.trim();
       let session = sessionId ? await getSessionWithExternalFallback(sessionId) : null;
-      if (session && hasSessionWalletMismatch(session, request.user_address)) {
+      if (session && hasSessionWalletMismatch(session, effectiveUserAddress)) {
         sessionId = generateSessionId();
         session = null;
       }
 
       if (!session) {
         sessionId = sessionId || generateSessionId();
-        session = createSession(sessionId, sessionId, request.user_address);
+        session = createSession(sessionId, sessionId, effectiveUserAddress, identitySessionMetadata(auth.identity));
         console.log(`[chat] New session: ${sessionId}`);
-      } else if (request.user_address && !session.userAddress) {
+      } else if (effectiveUserAddress && !session.userAddress) {
         // Update user address if provided and not set
-        updateSession(sessionId, { userAddress: request.user_address });
-        session.userAddress = request.user_address;
+        updateSession(sessionId, { userAddress: effectiveUserAddress, ...identitySessionMetadata(auth.identity) });
+        session.userAddress = effectiveUserAddress;
+      } else if (auth.identity) {
+        updateSession(sessionId, identitySessionMetadata(auth.identity) ?? {});
       }
 
       // Send session info first
@@ -2301,7 +2378,7 @@ async function handleFunctionApprove(request: {
   action_hash?: string;
   accept_risk?: boolean;
   user_address?: string;
-}): Promise<Response> {
+}, auth: ChatAuthContext): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
   }
@@ -2310,9 +2387,8 @@ async function handleFunctionApprove(request: {
   if (!session) {
     return sessionNotFoundResponse();
   }
-  if (hasSessionWalletMismatch(session, request.user_address)) {
-    return sessionNotFoundResponse();
-  }
+  const authorizationError = authorizeSessionAccess(session, request.user_address, auth);
+  if (authorizationError) return authorizationError;
 
   if (!session.pendingProposal) {
     return jsonResponse({ error: { code: 'no_pending_proposal', message: 'No pending proposal for this session' } }, { status: 400 });
@@ -3151,7 +3227,7 @@ async function handleFunctionResult(request: {
   status: 'submitted' | 'confirmed' | 'failed';
   error_message?: string;
   user_address?: string;
-}): Promise<Response> {
+}, auth: ChatAuthContext): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
   }
@@ -3160,9 +3236,8 @@ async function handleFunctionResult(request: {
   if (!session) {
     return sessionNotFoundResponse();
   }
-  if (hasSessionWalletMismatch(session, request.user_address)) {
-    return sessionNotFoundResponse();
-  }
+  const authorizationError = authorizeSessionAccess(session, request.user_address, auth);
+  if (authorizationError) return authorizationError;
 
   if (!session.pendingProposal) {
     return jsonResponse({ error: { code: 'no_pending_proposal', message: 'No pending proposal for this session' } }, { status: 400 });
@@ -3340,7 +3415,7 @@ async function handleFunctionReject(request: {
   session_id: string;
   reason?: string;
   user_address?: string;
-}): Promise<Response> {
+}, auth: ChatAuthContext): Promise<Response> {
   if (!request.session_id?.trim()) {
     return jsonResponse({ error: { code: 'invalid_payload', message: 'session_id is required' } }, { status: 400 });
   }
@@ -3349,9 +3424,8 @@ async function handleFunctionReject(request: {
   if (!session) {
     return sessionNotFoundResponse();
   }
-  if (hasSessionWalletMismatch(session, request.user_address)) {
-    return sessionNotFoundResponse();
-  }
+  const authorizationError = authorizeSessionAccess(session, request.user_address, auth);
+  if (authorizationError) return authorizationError;
 
   if (!session.pendingProposal) {
     return jsonResponse({ error: { code: 'no_pending_proposal', message: 'No pending proposal for this session' } }, { status: 400 });

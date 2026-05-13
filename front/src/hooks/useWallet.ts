@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { web3 } from '@coral-xyz/anchor';
+import { getAuthToken } from '@dynamic-labs/sdk-react-core';
+import { createDynamicAppSession, logoutAppSession } from '@/lib/api/client';
+import { useDynamicWalletRuntime } from '@/providers/dynamicWalletRuntime';
 import {
   getPhantomProvider,
   type PhantomExecutionErrorCode,
@@ -17,8 +20,10 @@ type WalletState = {
   walletError: string | undefined;
 };
 
+type WalletExecutionErrorCode = PhantomExecutionErrorCode | 'wallet_not_connected';
+
 type SignAndSendError = Error & {
-  code?: PhantomExecutionErrorCode;
+  code?: WalletExecutionErrorCode;
 };
 
 const INITIAL_WALLET_STATE: WalletState = {
@@ -33,6 +38,7 @@ let walletState = INITIAL_WALLET_STATE;
 const walletListeners = new Set<() => void>();
 let phantomEventsInitialized = false;
 let eagerConnectAttempted = false;
+let lastDynamicAppSessionKey: string | null = null;
 
 function getErrorMessage(error: unknown): string | undefined {
   if (!error) return undefined;
@@ -187,19 +193,36 @@ function mapPhantomError(error: unknown): { code: PhantomExecutionErrorCode; mes
   return { code: 'send_failed', message };
 }
 
-function throwWithCode(code: PhantomExecutionErrorCode, message: string): never {
+function throwWithCode(code: WalletExecutionErrorCode, message: string): never {
   const error = new Error(message) as SignAndSendError;
   error.code = code;
   throw error;
 }
 
+function safeGetDynamicAuthToken(): string | undefined {
+  try {
+    return getAuthToken();
+  } catch (error) {
+    console.warn('[useWallet] Dynamic auth token is unavailable:', error);
+    return undefined;
+  }
+}
+
 export function useWallet() {
+  const dynamicWallet = useDynamicWalletRuntime();
   const state = useSyncExternalStore(subscribeToWallet, getWalletSnapshot, getWalletSnapshot);
-  const balancesQuery = useWalletBalances(state.address);
+  const usesDynamicWallet = Boolean(dynamicWallet?.isEnabled);
+  const activeAddress = usesDynamicWallet ? dynamicWallet?.address : state.address;
+  const balancesQuery = useWalletBalances(activeAddress);
   const highlightBalances = getHighlightBalances(balancesQuery.data?.balances);
   const allocation = getAllocationFromBalances(balancesQuery.data?.balances);
 
   const connect = useCallback(async () => {
+    if (usesDynamicWallet && dynamicWallet) {
+      await dynamicWallet.connect();
+      return;
+    }
+
     updateWalletState({ walletError: undefined, isConnecting: true, isResolved: true });
 
     try {
@@ -222,9 +245,25 @@ export function useWallet() {
         address: undefined,
       });
     }
-  }, []);
+  }, [dynamicWallet, usesDynamicWallet]);
 
   const disconnect = useCallback(async () => {
+    if (usesDynamicWallet && dynamicWallet) {
+      await logoutAppSession().catch((error) => {
+        console.warn('[useWallet] Failed to clear app session during Dynamic logout:', error);
+      });
+      lastDynamicAppSessionKey = null;
+      updateWalletState({
+        address: undefined,
+        isConnected: false,
+        isConnecting: false,
+        isResolved: true,
+        walletError: undefined,
+      });
+      await dynamicWallet.disconnect();
+      return;
+    }
+
     try {
       const provider = getPhantomProvider();
 
@@ -243,25 +282,35 @@ export function useWallet() {
       console.error('Failed to disconnect from Phantom:', error);
       updateWalletState({ walletError: getErrorMessage(error), isConnecting: false, isResolved: true });
     }
-  }, []);
+  }, [dynamicWallet, usesDynamicWallet]);
 
   const signAndSendPreparedTransaction = useCallback(async (
     unsignedTxBase64: string,
     expectedUserAddress?: string
   ): Promise<PhantomExecutionResult> => {
-    const provider = getPhantomProvider();
+    const provider = usesDynamicWallet ? null : getPhantomProvider();
 
-    if (!provider) {
+    if (usesDynamicWallet && !dynamicWallet) {
+      throwWithCode('wallet_not_connected', 'No hay wallet conectada.');
+    }
+
+    if (!usesDynamicWallet && !provider) {
       throwWithCode('phantom_not_detected', 'Phantom wallet no detectada. Instálala y recarga la página.');
     }
 
-    if (!state.isConnected || !state.address) {
+    if (usesDynamicWallet && (!dynamicWallet?.isConnected || !dynamicWallet.address)) {
+      throwWithCode('wallet_not_connected', 'La wallet Dynamic está desconectada.');
+    }
+
+    if (!usesDynamicWallet && (!state.isConnected || !state.address)) {
       throwWithCode('phantom_not_connected', 'Phantom está desconectado.');
     }
 
-    const connectedAddress = provider.publicKey?.toBase58() ?? state.address;
+    const connectedAddress = usesDynamicWallet
+      ? dynamicWallet?.address
+      : provider?.publicKey?.toBase58() ?? state.address;
     if (!connectedAddress) {
-      throwWithCode('phantom_not_connected', 'No se detectó cuenta conectada en Phantom.');
+      throwWithCode('wallet_not_connected', 'No se detectó cuenta conectada.');
     }
 
     if (expectedUserAddress && connectedAddress !== expectedUserAddress) {
@@ -331,23 +380,28 @@ export function useWallet() {
       
       let signResult;
       
-      if (isVersioned) {
+      if (usesDynamicWallet && dynamicWallet) {
+        console.log('[useWallet] Signing with Dynamic Solana wallet...');
+        signResult = await dynamicWallet.signAndSendTransaction(tx);
+      } else if (isVersioned) {
         // VersionedTransaction - use signAndSendTransaction directly
         console.log('[useWallet] Signing VersionedTransaction...');
-        signResult = await provider.signAndSendTransaction(tx as web3.VersionedTransaction);
+        signResult = await provider!.signAndSendTransaction(tx as web3.VersionedTransaction);
       } else {
         // Legacy Transaction - Phantom also supports this via signAndSendTransaction
         console.log('[useWallet] Signing LegacyTransaction...');
-        signResult = await provider.signAndSendTransaction(tx as web3.Transaction);
+        signResult = await provider!.signAndSendTransaction(tx as web3.Transaction);
       }
       
       const signature = typeof signResult === 'string' ? signResult : signResult?.signature;
 
       if (!signature) {
-        throwWithCode('send_failed', 'Phantom no devolvió una firma válida.');
+        throwWithCode('send_failed', 'La wallet no devolvió una firma válida.');
       }
 
-      const currentAddress = provider.publicKey?.toBase58() ?? connectedAddress;
+      const currentAddress = usesDynamicWallet
+        ? dynamicWallet?.address
+        : provider?.publicKey?.toBase58() ?? connectedAddress;
       if (expectedUserAddress && currentAddress !== expectedUserAddress) {
         throwWithCode('account_changed', 'La cuenta cambió durante la firma.');
       }
@@ -366,24 +420,87 @@ export function useWallet() {
       const mapped = mapPhantomError(error);
       throwWithCode(mapped.code, mapped.message);
     }
-  }, [state.isConnected, state.address]);
+  }, [
+    dynamicWallet,
+    state.address,
+    state.isConnected,
+    usesDynamicWallet,
+  ]);
 
   useEffect(() => {
+    if (!usesDynamicWallet) return;
+    if (!dynamicWallet?.isResolved) return;
+
+    if (!dynamicWallet.address || !dynamicWallet.walletType) {
+      if (lastDynamicAppSessionKey) {
+        lastDynamicAppSessionKey = null;
+        void logoutAppSession().catch((error) => {
+          console.warn('[useWallet] Failed to clear app session after Dynamic wallet disconnect:', error);
+        });
+      }
+      return;
+    }
+
+    const sessionKey = [
+      dynamicWallet.dynamicUserId || 'anonymous-dynamic-user',
+      dynamicWallet.address,
+      dynamicWallet.walletType,
+      dynamicWallet.walletProvider || 'unknown-provider',
+    ].join(':');
+    if (lastDynamicAppSessionKey === sessionKey) return;
+    lastDynamicAppSessionKey = sessionKey;
+
+    void createDynamicAppSession({
+      dynamicUserId: dynamicWallet.dynamicUserId,
+      walletAddress: dynamicWallet.address,
+      walletType: dynamicWallet.walletType,
+      walletProvider: dynamicWallet.walletProvider,
+      dynamicAuthToken: safeGetDynamicAuthToken(),
+    }).then(() => {
+      updateWalletState({ walletError: undefined });
+    }).catch((error) => {
+      lastDynamicAppSessionKey = null;
+      updateWalletState({ walletError: getErrorMessage(error) || 'No se pudo crear la sesión de Compass.' });
+      console.error('[useWallet] Failed to create app session from Dynamic wallet:', error);
+    });
+  }, [
+    dynamicWallet?.address,
+    dynamicWallet?.dynamicUserId,
+    dynamicWallet?.isResolved,
+    dynamicWallet?.walletProvider,
+    dynamicWallet?.walletType,
+    usesDynamicWallet,
+  ]);
+
+  useEffect(() => {
+    if (usesDynamicWallet) return;
     initializePhantomEvents();
     attemptEagerConnect();
-  }, []);
+  }, [usesDynamicWallet]);
 
   return {
-    isConnected: state.isConnected,
-    isConnecting: state.isConnecting,
+    isAuthenticated: usesDynamicWallet ? Boolean(dynamicWallet?.address) : state.isConnected,
+    isConnected: usesDynamicWallet ? Boolean(dynamicWallet?.isConnected) : state.isConnected,
+    isConnecting: usesDynamicWallet ? Boolean(dynamicWallet?.isConnecting) : state.isConnecting,
     isDisconnecting: false,
-    isResolved: state.isResolved,
-    address: state.address,
+    isResolved: usesDynamicWallet ? Boolean(dynamicWallet?.isResolved) : state.isResolved,
+    address: activeAddress,
+    walletType: usesDynamicWallet ? dynamicWallet?.walletType : 'external' as const,
+    walletProvider: usesDynamicWallet ? dynamicWallet?.walletProvider : 'phantom',
+    dynamicUserId: usesDynamicWallet ? dynamicWallet?.dynamicUserId : undefined,
+    authStatus: usesDynamicWallet
+      ? dynamicWallet?.address
+        ? 'verified' as const
+        : 'unauthenticated' as const
+      : state.isConnected
+        ? 'connected' as const
+        : 'unauthenticated' as const,
     connect,
     disconnect,
-    exportPrivateKey: undefined as undefined | (() => Promise<void>),
+    exportPrivateKey: dynamicWallet?.exportWallet,
+    exportWallet: dynamicWallet?.exportWallet,
     signAndSendPreparedTransaction,
-    walletError: state.walletError,
+    walletError: usesDynamicWallet ? dynamicWallet?.walletError : state.walletError,
     balances: balancesQuery.data,
     allocation,
     highlightBalances,

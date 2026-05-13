@@ -74,12 +74,29 @@ describe('chatStore conversation persistence', () => {
 
   it('keeps at most 20 conversations in memory/history', () => {
     const state = useChatStore.getState();
+    state.setCurrentWalletAddress('wallet-1');
     for (let index = 0; index < 25; index++) {
       state.startNewConversation('wallet-1');
     }
 
     const list = state.getConversationList();
     expect(list).toHaveLength(20);
+  });
+
+  it('filters conversation history by active wallet', () => {
+    const state = useChatStore.getState();
+    state.setCurrentWalletAddress('wallet-1');
+    state.addUserMessage('Wallet 1 question');
+
+    state.setCurrentWalletAddress('wallet-2');
+    state.addUserMessage('Wallet 2 question');
+
+    expect(state.getConversationList()).not.toHaveLength(0);
+    expect(state.getConversationList().every((conversation) => conversation.lastWalletAddress === 'wallet-2')).toBe(true);
+
+    state.setCurrentWalletAddress('wallet-1');
+    expect(state.getConversationList()).not.toHaveLength(0);
+    expect(state.getConversationList().every((conversation) => conversation.lastWalletAddress === 'wallet-1')).toBe(true);
   });
 
   it('selectConversation loads the selected conversation messages in active panel state', () => {

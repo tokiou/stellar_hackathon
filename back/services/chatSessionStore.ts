@@ -120,6 +120,10 @@ export type SessionState = {
   sessionId: string;
   threadId: string;
   userAddress: string | null;
+  dynamicUserId?: string;
+  walletType?: 'external' | 'embedded';
+  walletProvider?: string;
+  verifiedAt?: string;
   messages: SessionHistoryMessage[];
   pendingProposal: PendingProposal | null;
   createdAt: number;
@@ -265,12 +269,21 @@ export function getSession(sessionId: string): SessionState | null {
   return session;
 }
 
-export function createSession(sessionId: string, threadId: string, userAddress?: string): SessionState {
+export function createSession(
+  sessionId: string,
+  threadId: string,
+  userAddress?: string,
+  metadata?: Pick<SessionState, 'dynamicUserId' | 'walletType' | 'walletProvider' | 'verifiedAt'>,
+): SessionState {
   const now = Date.now();
   const session: SessionState = {
     sessionId,
     threadId,
     userAddress: userAddress || null,
+    dynamicUserId: metadata?.dynamicUserId,
+    walletType: metadata?.walletType,
+    walletProvider: metadata?.walletProvider,
+    verifiedAt: metadata?.verifiedAt,
     messages: [],
     pendingProposal: null,
     createdAt: now,
@@ -283,7 +296,7 @@ export function createSession(sessionId: string, threadId: string, userAddress?:
 
 export function updateSession(
   sessionId: string,
-  updates: Partial<Pick<SessionState, 'messages' | 'pendingProposal' | 'threadId' | 'userAddress'>>
+  updates: Partial<Pick<SessionState, 'messages' | 'pendingProposal' | 'threadId' | 'userAddress' | 'dynamicUserId' | 'walletType' | 'walletProvider' | 'verifiedAt'>>
 ): SessionState | null {
   const session = getSession(sessionId);
   if (!session) return null;

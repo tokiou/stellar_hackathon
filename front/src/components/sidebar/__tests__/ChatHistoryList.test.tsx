@@ -90,7 +90,7 @@ describe('ChatHistoryList', () => {
     expect(state.getConversationList()[0]?.title).toBe('Nueva conversación');
   });
 
-  it('indicates wallet mismatch as read-only', () => {
+  it('hides conversations from a different active wallet', () => {
     const state = useChatStore.getState();
     state.startNewConversation('wallet-1');
     state.addUserMessage('Primera conversación');
@@ -112,6 +112,7 @@ describe('ChatHistoryList', () => {
 
     render(<ChatHistoryList />);
 
-    expect(screen.getAllByText('Wallet distinta').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Primera conversación')).toBeNull();
+    expect(screen.getByText('Nueva conversación')).toBeDefined();
   });
 });

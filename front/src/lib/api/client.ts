@@ -68,7 +68,7 @@ function throwIfApiError(data: unknown, status: number): void {
 }
 
 async function getJson<T>(url: string, schema: { parse: (value: unknown) => T }): Promise<T> {
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const response = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
   const data = await parseJson(response);
   throwIfApiError(data, response.status);
   if (!response.ok) {
@@ -83,6 +83,7 @@ async function getJson<T>(url: string, schema: { parse: (value: unknown) => T })
 async function postJson<T>(url: string, body: unknown, schema: { parse: (value: unknown) => T }): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -153,6 +154,37 @@ export type ChatStreamCallbacks = {
   onError?: (error: { code: string; message: string }) => void;
 };
 
+export type AppWalletType = 'external' | 'embedded';
+
+export type AppSessionResponse = {
+  session_id: string;
+  dynamic_user_id?: string;
+  wallet_address: string;
+  wallet_type: AppWalletType;
+  wallet_provider?: string;
+  verified_at: string;
+  expires_at?: string;
+  verification_mode?: 'verified' | 'development' | 'session';
+};
+
+export async function createDynamicAppSession(input: {
+  dynamicUserId?: string;
+  walletAddress: string;
+  walletType: AppWalletType;
+  walletProvider?: string;
+  dynamicAuthToken?: string;
+}): Promise<AppSessionResponse> {
+  return postJson('/api/auth/dynamic/session', input, { parse: (value) => value as AppSessionResponse });
+}
+
+export async function getAppSession(): Promise<AppSessionResponse> {
+  return getJson('/api/auth/session', { parse: (value) => value as AppSessionResponse });
+}
+
+export async function logoutAppSession(): Promise<void> {
+  await postJson('/api/auth/logout', {}, { parse: () => undefined });
+}
+
 // ============================================================================
 // SSE Chat Client
 // ============================================================================
@@ -168,6 +200,7 @@ export async function streamChat(
 ): Promise<void> {
   const response = await fetch('/api/chat', {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',

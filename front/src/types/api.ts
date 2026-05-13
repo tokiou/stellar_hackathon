@@ -279,9 +279,10 @@ export type SessionHistoryMessage =
 
 export type AgentMessageRequest =
   | { type: 'user_message'; content: string; session_id?: string; user_address?: string; user_threshold_usd?: number }
-  | { type: 'function_approve'; session_id: string; user_address?: string }
+  | { type: 'function_approve'; session_id: string; action_hash?: string; accept_risk?: boolean; user_address?: string }
   | { type: 'function_result'; session_id: string; tx_signature: string; status: 'submitted' | 'confirmed' | 'failed'; error_message?: string; user_address?: string }
-  | { type: 'function_reject'; session_id: string; reason?: string; user_address?: string };
+  | { type: 'function_reject'; session_id: string; reason?: string; user_address?: string }
+  | { type: 'get_history'; session_id: string; user_address?: string };
 
 export type SwapGuard = {
   program_id: string;
