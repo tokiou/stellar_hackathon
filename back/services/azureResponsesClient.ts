@@ -51,6 +51,40 @@ export type StreamEvent = {
   [key: string]: any;
 };
 
+type AzureResponsesConfig = {
+  apiKey: string;
+  model: string;
+  endpoint: string;
+};
+
+function requireEnv(name: string): string {
+  const value = getEnv(name);
+  if (!value) {
+    throw new Error(`${name} not configured`);
+  }
+  return value;
+}
+
+export function getAzureResponsesConfig(): AzureResponsesConfig {
+  const apiKey = requireEnv('OPENAI_API_KEY');
+  const model = requireEnv('OPENAI_CHAT_MODEL');
+  const explicitEndpoint = getEnv('OPENAI_RESPONSES_ENDPOINT');
+
+  if (explicitEndpoint) {
+    return { apiKey, model, endpoint: explicitEndpoint };
+  }
+
+  const baseUrl = getEnv('OPENAI_API_URL');
+  if (!baseUrl) {
+    throw new Error('OPENAI_RESPONSES_ENDPOINT or OPENAI_API_URL not configured');
+  }
+
+  const apiVersion = getEnv('AZURE_OPENAI_API_VERSION') || '2025-04-01-preview';
+  const endpoint = `${baseUrl.replace(/\/$/, '')}/responses?api-version=${apiVersion}`;
+
+  return { apiKey, model, endpoint };
+}
+
 /**
  * Converts chat messages to Responses API input format.
  * The Responses API expects a single input string or structured input.
@@ -89,16 +123,7 @@ export async function callAzureResponsesStream(options: {
   tools?: ResponsesToolDefinition[];
   maxOutputTokens?: number;
 }): Promise<ReadableStream<Uint8Array>> {
-  const apiKey = getEnv('OPENAI_API_KEY');
-  const baseUrl = getEnv('OPENAI_API_URL') || 'https://khora-ai.cognitiveservices.azure.com/openai';
-  const model = getEnv('OPENAI_CHAT_MODEL') || 'gpt-5.3-codex';
-  const apiVersion = getEnv('AZURE_OPENAI_API_VERSION') || '2025-04-01-preview';
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
-  }
-
-  const url = `${baseUrl.replace(/\/$/, '')}/responses?api-version=${apiVersion}`;
+  const { apiKey, model, endpoint } = getAzureResponsesConfig();
 
   const body: Record<string, unknown> = {
     model,
@@ -115,7 +140,7 @@ export async function callAzureResponsesStream(options: {
     body.tools = options.tools;
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -145,16 +170,7 @@ export async function callAzureResponses(options: {
   tools?: ResponsesToolDefinition[];
   maxOutputTokens?: number;
 }): Promise<ResponsesApiResponse> {
-  const apiKey = getEnv('OPENAI_API_KEY');
-  const baseUrl = getEnv('OPENAI_API_URL') || 'https://khora-ai.cognitiveservices.azure.com/openai';
-  const model = getEnv('OPENAI_CHAT_MODEL') || 'gpt-5.3-codex';
-  const apiVersion = getEnv('AZURE_OPENAI_API_VERSION') || '2025-04-01-preview';
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
-  }
-
-  const url = `${baseUrl.replace(/\/$/, '')}/responses?api-version=${apiVersion}`;
+  const { apiKey, model, endpoint } = getAzureResponsesConfig();
 
   const body: Record<string, unknown> = {
     model,
@@ -171,7 +187,7 @@ export async function callAzureResponses(options: {
     body.tools = options.tools;
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

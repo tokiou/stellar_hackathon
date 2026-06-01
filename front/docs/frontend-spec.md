@@ -4,7 +4,7 @@
 **Para qué sirve:** define la arquitectura y decisiones canónicas del frontend.  
 **Historia:** reemplaza docs anteriores de risk engine/providers en cliente; si hay contradicción, este documento gana.
 
-Spec del frontend para el proyecto Solana Hackathon. Cubre estructura, wallet layer, componentes, estados y plan de fases.
+Spec del frontend para el proyecto Compass. Cubre estructura, wallet layer, componentes, estados y plan de fases.
 
 ---
 

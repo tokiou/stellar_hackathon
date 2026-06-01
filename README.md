@@ -242,7 +242,7 @@ Grupos principales:
 
 | Grupo | Variables típicas | Uso |
 |---|---|---|
-| Agent/LLM | `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_API_URL` | Chat agentic y opiniones textuales. |
+| Agent/LLM | `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_RESPONSES_ENDPOINT` | Chat agentic y opiniones textuales vía Responses API. |
 | Providers | `BIRDEYE_*`, `HELIUS_*`, `RISK_SCORE_*`, `JUPITER_API_URL` | Datos externos y scoring server-side. |
 | Chat store | `CHAT_SESSION_REDIS_REST_*`, `UPSTASH_REDIS_REST_*`, `KV_REST_API_*` | Persistencia de sesiones en Vercel. |
 | Solana/devnet | Ver `docs/onchain-deployments.md` y `.env.example` | Program IDs, mints, feeds y keeper opcional. |

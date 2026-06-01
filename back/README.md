@@ -62,7 +62,7 @@ Configurar en Vercel o `.env.local` en la raíz. No commitear valores reales.
 | Birdeye | `BIRDEYE_API_KEY`, `BIRDEYE_API_URL` | Necesario para token security live. |
 | Risk score | `RISK_SCORE_API_URL`, `RISK_SCORE_API_KEY` | Necesario para provider externo si está activo. |
 | Helius | `HELIUS_API_KEY`, `HELIUS_API_URL` | Necesario para historial/provider Helius. |
-| LLM | `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_API_URL` | Necesario para chat agentic live; modelo/url tienen defaults. |
+| LLM | `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_RESPONSES_ENDPOINT` | Necesario para chat agentic live; modelo y endpoint se configuran por entorno. `OPENAI_API_URL` + `AZURE_OPENAI_API_VERSION` quedan como fallback legacy. |
 | Chat store | `CHAT_SESSION_REDIS_REST_URL`, `CHAT_SESSION_REDIS_REST_TOKEN` | Recomendado en Vercel para persistir sesiones. |
 | Upstash/Vercel KV aliases | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Alternativas aceptadas para chat store. |
 | Solana/devnet | Ver `../docs/onchain-deployments.md` y `.env.example` | Program IDs, mints, feeds y keeper opcional. |

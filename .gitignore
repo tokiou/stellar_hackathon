@@ -44,6 +44,7 @@ pnpm-debug.log*
 *.temp
 .cache
 *.tsbuildinfo
+progress.md
 
 # Anchor/Solana build artifacts
 **/target/
@@ -52,3 +53,26 @@ pnpm-debug.log*
 .vercel
 # Local Pi runtime state
 .atl/
+.pi/
+
+# Local agent/worktree state
+.claude/
+.codex/
+
+# Local env/secrets (examples stay allowed)
+.env.*
+!.env.example
+!**/.env.example
+.env.vercel
+credentials
+credentials/
+dynamic_private_key
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Accidental space-named files
+/[ ]
