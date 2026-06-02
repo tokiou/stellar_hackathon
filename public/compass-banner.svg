@@ -1,0 +1,19 @@
+<svg width="960" height="360" viewBox="0 0 960 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Compass banner</title>
+  <desc id="desc">Compass product banner with Solana guardrail messaging.</desc>
+  <rect width="960" height="360" rx="36" fill="#0F172A"/>
+  <circle cx="812" cy="72" r="180" fill="#0052FF" fill-opacity="0.26"/>
+  <circle cx="120" cy="312" r="160" fill="#16A34A" fill-opacity="0.12"/>
+  <rect x="64" y="64" width="96" height="96" rx="26" fill="#0052FF"/>
+  <path d="M112 142C112 142 140 128 140 100V74L112 64L84 74V100C84 128 112 142 112 142Z" fill="white" fill-opacity="0.18" stroke="white" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M126 84L116 112L88 122L98 94L126 84Z" fill="white"/>
+  <text x="188" y="104" fill="white" font-family="Inter, Arial, sans-serif" font-size="44" font-weight="750" letter-spacing="-1">Compass</text>
+  <text x="188" y="148" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="500">AI wallet guardrails for Solana</text>
+  <rect x="188" y="188" width="202" height="42" rx="21" fill="white" fill-opacity="0.1" stroke="white" stroke-opacity="0.14"/>
+  <text x="212" y="216" fill="white" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="650">Guard before signing</text>
+  <rect x="412" y="188" width="148" height="42" rx="21" fill="#0052FF"/>
+  <text x="436" y="216" fill="white" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="650">Devnet ready</text>
+  <path d="M680 120C728 96 792 100 832 132C870 162 884 214 858 250C826 294 746 300 688 272C638 248 612 194 630 158C638 142 650 130 680 120Z" fill="white" fill-opacity="0.08" stroke="white" stroke-opacity="0.18" stroke-width="2"/>
+  <path d="M740 236C740 236 792 210 792 158V111L740 92L688 111V158C688 210 740 236 740 236Z" stroke="white" stroke-width="8" stroke-linejoin="round" fill="none"/>
+  <path d="M763 133L744 184L693 203L712 152L763 133Z" fill="white"/>
+</svg>

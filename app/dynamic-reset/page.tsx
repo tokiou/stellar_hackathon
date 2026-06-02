@@ -45,7 +45,7 @@ export default function DynamicResetPage() {
         setMessage('Sesión local de Dynamic limpiada. Redirigiendo...');
       } finally {
         window.setTimeout(() => {
-          window.location.replace('/');
+          window.location.replace('/home');
         }, 500);
       }
     }
