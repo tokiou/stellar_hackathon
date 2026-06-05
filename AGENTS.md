@@ -90,3 +90,12 @@ Si una herramienta propone abrir PR contra `main`, corregir la base a `release/c
 
 Ninguna operacion critica debe ejecutarse sin pasar primero por la capa de guardrails.
 Si una validacion falla, el sistema debe responder con motivo claro y accion sugerida (bloquear, pedir confirmacion extra o reintentar bajo nuevas condiciones).
+
+## Convencion de tipos
+
+Los tipos, interfaces, enums/constantes canonicas y contratos compartidos deben vivir siempre en un archivo separado del comportamiento o la logica de negocio.
+
+- Evitar mezclar types/contracts con funciones que ejecutan reglas, IO, validaciones o side effects.
+- Preferir archivos dedicados como `*Types.ts`, `*Contracts.ts` o `*Schema.ts` cuando el schema sea estrictamente contractual.
+- Las funciones de negocio deben importar los tipos desde ese archivo dedicado.
+- Si una feature empieza chica, mantener igual la separacion desde el inicio para evitar refactors posteriores.
