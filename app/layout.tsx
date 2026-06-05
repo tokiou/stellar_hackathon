@@ -2,8 +2,16 @@ import type { Metadata } from 'next';
 import '../front/src/styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'Compass',
-  description: 'AI wallet guardrails for safer Solana actions.',
+  title: 'Compass · The execution firewall for Solana AI agents',
+  description: 'Compass sits between AI agents, tools and wallets to decode, simulate, approve and audit critical actions before they can be signed.',
+  icons: {
+    icon: [
+      { url: '/compass-icon-32.png', type: 'image/png', sizes: '32x32' },
+      { url: '/compass-icon.png', type: 'image/png', sizes: '256x256' },
+    ],
+    shortcut: '/compass-icon.png',
+    apple: '/compass-icon.png',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
