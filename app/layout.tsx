@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import '../front/src/styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'Compass · Security layer for AI agents',
-  description: 'MCP execution firewall and security layer for AI agents operating on Solana.',
+  title: 'Compass · The execution firewall for Solana AI agents',
+  description: 'Compass sits between AI agents, tools and wallets to decode, simulate, approve and audit critical actions before they can be signed.',
   icons: {
     icon: [
       { url: '/compass-icon-32.png', type: 'image/png', sizes: '32x32' },

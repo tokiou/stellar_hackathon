@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Compass · Security layer for AI agents on Solana</title>
-  <meta name="description" content="Compass is not another wallet. It is an MCP execution firewall and security layer for AI agents operating on Solana." />
+  <title>Compass · The execution firewall for Solana AI agents</title>
+  <meta name="description" content="Compass sits between AI agents, tools and wallets to decode, simulate, approve and audit critical actions before they can be signed." />
   <link rel="icon" type="image/png" sizes="32x32" href="/compass-icon-32.png" />
   <link rel="icon" type="image/png" sizes="256x256" href="/compass-icon.png" />
   <link rel="apple-touch-icon" href="/compass-icon.png" />
@@ -15,22 +15,22 @@
     *, *::before, *::after { box-sizing: border-box; }
     * { margin: 0; }
 
-    /* ── Palette: near-black + ink + two brand accents from the logo ── */
+    /* ── Palette: warm light + ink + two brand accents from the mark ── */
     :root {
-      --bg:          #0a0a0c;
-      --bg-2:        #101013;
-      --ink:         #f1f1f3;
-      --ink-soft:    #a1a3aa;
-      --ink-muted:   #62656d;
-      --line:        rgba(255, 255, 255, .07);
-      --line-strong: rgba(255, 255, 255, .14);
-      --cyan:        #33e2c0;          /* top of the compass needle */
-      --cyan-soft:   rgba(51, 226, 192, .14);
-      --violet:      #8a4cff;          /* bottom of the compass needle */
-      --violet-soft: rgba(138, 76, 255, .16);
-      --grad:        linear-gradient(120deg, #33e2c0 0%, #19c8ff 45%, #8a4cff 100%);
+      --bg:          #ffffff;
+      --bg-2:        #ffffff;
+      --ink:         #101218;
+      --ink-soft:    #4d5566;
+      --ink-muted:   #7d8492;
+      --line:        rgba(16, 18, 24, .10);
+      --line-strong: rgba(16, 18, 24, .16);
+      --cyan:        #00a98f;          /* top of the compass needle */
+      --cyan-soft:   rgba(0, 169, 143, .12);
+      --violet:      #7042e8;          /* bottom of the compass needle */
+      --violet-soft: rgba(112, 66, 232, .13);
+      --grad:        linear-gradient(120deg, #00a98f 0%, #138adf 45%, #7042e8 100%);
       --radius:      20px;
-      --shadow:      0 24px 60px rgba(0, 0, 0, .5);
+      --shadow:      0 24px 70px rgba(34, 39, 56, .14);
     }
 
     html { scroll-behavior: smooth; background: var(--bg); }
@@ -44,16 +44,19 @@
       letter-spacing: -.005em;
       overflow-x: hidden;
     }
-    /* Very subtle ambient light */
+    /* Edge-tinted wash: brand color at the borders, white in the center */
     body::before {
       content: "";
       position: fixed;
       inset: 0;
       pointer-events: none;
       background:
-        radial-gradient(900px circle at 85% -10%, rgba(51, 226, 192, .09), transparent 60%),
-        radial-gradient(800px circle at -10% 30%, rgba(138, 76, 255, .10), transparent 60%),
-        radial-gradient(700px circle at 50% 110%, rgba(138, 76, 255, .06), transparent 60%);
+        radial-gradient(125% 100% at 50% 50%, #ffffff 30%, rgba(255,255,255,0) 74%),
+        radial-gradient(circle at 0% 0%,    rgba(0, 169, 143, .28), transparent 56%),
+        radial-gradient(circle at 100% 0%,  rgba(19, 138, 223, .23), transparent 56%),
+        radial-gradient(circle at 100% 100%, rgba(112, 66, 232, .28), transparent 56%),
+        radial-gradient(circle at 0% 100%,  rgba(112, 66, 232, .18), transparent 56%),
+        #ffffff;
       z-index: 0;
     }
     /* Tiny grain */
@@ -62,7 +65,7 @@
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: .045;
+      opacity: .028;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
       z-index: 0;
     }
@@ -74,22 +77,21 @@
 
     /* ── Nav ── */
     .nav {
-      position: sticky; top: 0; z-index: 30;
-      border-bottom: 1px solid var(--line);
-      background: rgba(10, 10, 12, .72);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
+      position: static;
+      z-index: 30;
+      border-bottom: 0;
+      background: transparent;
     }
-    .nav-inner { height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 22px; }
+    .nav-inner { height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 22px; }
     .brand { display: flex; align-items: center; height: 100%; transition: filter .25s ease; }
     .brand-mark {
       display: block;
-      width: 36px;
-      height: 36px;
-      filter: drop-shadow(0 6px 18px rgba(138, 76, 255, .35));
+      width: 48px;
+      height: 48px;
+      filter: drop-shadow(0 8px 18px rgba(112, 66, 232, .18));
       transition: transform .35s ease, filter .25s ease;
     }
-    .brand:hover .brand-mark { transform: rotate(-6deg) scale(1.06); filter: drop-shadow(0 8px 22px rgba(51, 226, 192, .45)); }
+    .brand:hover .brand-mark { transform: rotate(-6deg) scale(1.06); filter: drop-shadow(0 10px 24px rgba(0, 169, 143, .24)); }
     .nav-links { display: flex; align-items: center; gap: 26px; color: var(--ink-soft); font-size: 13.5px; font-weight: 500; }
     .nav-links a:not(.nav-cta) { position: relative; padding: 4px 0; transition: color .2s; }
     .nav-links a:not(.nav-cta):hover { color: var(--ink); }
@@ -107,7 +109,7 @@
     }
     .btn-primary, .nav-cta {
       position: relative;
-      color: #0a0a0c;
+      color: white;
       background: var(--ink);
       isolation: isolate;
       overflow: hidden;
@@ -120,14 +122,14 @@
       transition: opacity .25s ease;
       z-index: -1;
     }
-    .btn-primary:hover, .nav-cta:hover { color: white; transform: translateY(-1px); }
+    .btn-primary:hover, .nav-cta:hover { color: white; transform: translateY(-1px); box-shadow: 0 10px 24px rgba(112, 66, 232, .18); }
     .btn-primary:hover::before, .nav-cta:hover::before { opacity: 1; }
     .btn-ghost {
       color: var(--ink-soft);
       background: transparent;
       border: 1px solid var(--line-strong);
     }
-    .btn-ghost:hover { color: var(--ink); border-color: rgba(138, 76, 255, .45); }
+    .btn-ghost:hover { color: var(--ink); border-color: rgba(112, 66, 232, .34); background: rgba(255, 255, 255, .42); }
 
     /* ── Reveal-on-scroll ── */
     .reveal { opacity: 0; transform: translateY(16px); transition: opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1); }
@@ -156,7 +158,7 @@
       border: 1px solid var(--line-strong);
       border-radius: 999px;
       color: var(--ink-soft);
-      background: linear-gradient(180deg, rgba(138,76,255,.06), transparent);
+      background: linear-gradient(180deg, rgba(112,66,232,.07), rgba(255,255,255,.52));
       font-family: "JetBrains Mono", ui-monospace, monospace;
       font-size: 11px; font-weight: 600;
       letter-spacing: .04em;
@@ -165,7 +167,7 @@
     .dot-cyan {
       width: 6px; height: 6px; border-radius: 50%;
       background: var(--cyan);
-      box-shadow: 0 0 0 0 rgba(51, 226, 192, .55);
+      box-shadow: 0 0 0 0 rgba(0, 169, 143, .38);
       animation: pulse 2.2s ease-out infinite;
     }
     h1 {
@@ -195,23 +197,44 @@
     .hero-actions { margin-top: 32px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .hero-note { margin-top: 22px; color: var(--ink-muted); font-size: 12px; }
 
-    /* Banner image */
-    .banner {
+    /* Hero mascot (no frame, transparent PNG floats over the gradient) */
+    .hero-mascot {
       position: relative;
-      border-radius: var(--radius);
-      overflow: hidden;
-      border: 1px solid var(--line-strong);
-      background: var(--bg-2);
-      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 420px;
     }
-    .banner img { width: 100%; display: block; }
-    .banner::after {
+    .hero-mascot::before {
       content: "";
       position: absolute;
-      inset: 0;
-      box-shadow: inset 0 0 1px rgba(255,255,255,.05);
+      left: 50%; top: 58%;
+      width: 72%;
+      aspect-ratio: 1 / 1;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(112, 66, 232, .28), transparent 62%);
+      filter: blur(20px);
+      z-index: 0;
       pointer-events: none;
-      border-radius: inherit;
+    }
+    .hero-mascot::after {
+      content: "";
+      position: absolute;
+      left: 50%; bottom: 6%;
+      transform: translateX(-50%);
+      width: 58%; height: 22px;
+      background: radial-gradient(ellipse at center, rgba(16, 18, 24, .18), transparent 70%);
+      filter: blur(10px);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .hero-mascot img {
+      position: relative;
+      width: min(100%, 460px);
+      filter: drop-shadow(0 22px 32px rgba(112, 66, 232, .28)) drop-shadow(0 6px 12px rgba(0, 169, 143, .18));
+      animation: needleFloat 6s ease-in-out infinite;
+      transform-origin: 60% 90%;
+      z-index: 1;
     }
 
     /* ── Strip ── */
@@ -247,12 +270,12 @@
       transition: background .25s ease;
     }
     .feature:last-child { border-right: 0; }
-    .feature:hover { background: rgba(255,255,255,.025); }
+    .feature:hover { background: rgba(16,18,24,.025); }
     .feature .n { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: .14em; }
     .feature:nth-child(1) .n { color: var(--cyan); }
     .feature:nth-child(2) .n { color: var(--violet); }
     .feature:nth-child(3) .n { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .feature:hover { background: linear-gradient(180deg, rgba(138, 76, 255, .04), transparent); }
+    .feature:hover { background: linear-gradient(180deg, rgba(112, 66, 232, .055), rgba(255,255,255,.35)); }
     .feature h3 { margin-top: 28px; font-size: 18px; line-height: 1.25; letter-spacing: -.015em; font-weight: 600; color: var(--ink); }
     .feature p { margin-top: 10px; color: var(--ink-soft); font-size: 14.5px; line-height: 1.55; }
     .feature ul { margin: 18px 0 0; padding: 0; list-style: none; }
@@ -269,8 +292,8 @@
       overflow: hidden;
     }
     .terminal-top { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
-    .tdot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.12); }
-    .tdot.on { background: var(--cyan); box-shadow: 0 0 12px rgba(51, 226, 192, .55); }
+    .tdot { width: 8px; height: 8px; border-radius: 50%; background: rgba(16,18,24,.18); }
+    .tdot.on { background: var(--cyan); box-shadow: 0 0 12px rgba(0, 169, 143, .32); }
     .tlabel { margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--ink-muted); letter-spacing: .12em; text-transform: uppercase; }
     .code-line {
       display: flex; gap: 14px; padding: 10px 0;
@@ -288,7 +311,7 @@
       border-radius: 999px;
       background: var(--grad);
       font-weight: 600;
-      box-shadow: 0 0 20px rgba(138, 76, 255, .35);
+      box-shadow: 0 8px 20px rgba(112, 66, 232, .22);
     }
     .terminal.in .code-line { animation: lineIn .5s cubic-bezier(.2,.7,.2,1) forwards; }
     .terminal.in .code-line:nth-child(2) { animation-delay: .15s; }
@@ -333,7 +356,7 @@
       border-bottom: 1px solid var(--line);
       transition: padding-left .25s ease;
     }
-    .rule:hover { padding-left: 10px; background: rgba(255,255,255,.015); }
+    .rule:hover { padding-left: 10px; background: rgba(16,18,24,.025); }
     .rule .what { color: var(--ink); font-size: 15px; }
     .rule .what em { color: var(--ink-muted); font-style: normal; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-left: 10px; letter-spacing: .04em; }
     .pill {
@@ -346,26 +369,132 @@
       color: var(--ink-soft);
       letter-spacing: .1em;
     }
-    .pill.deny    { color: white; background: var(--violet); border-color: transparent; box-shadow: 0 0 18px rgba(138, 76, 255, .35); }
-    .pill.permit  { color: #08322a; background: var(--cyan); border-color: transparent; box-shadow: 0 0 18px rgba(51, 226, 192, .3); }
-    .pill.confirm { color: var(--ink); border-color: rgba(255, 255, 255, .28); }
+    .pill.deny    { color: white; background: var(--violet); border-color: transparent; box-shadow: 0 8px 18px rgba(112, 66, 232, .22); }
+    .pill.permit  { color: #062923; background: var(--cyan); border-color: transparent; box-shadow: 0 8px 18px rgba(0, 169, 143, .18); }
+    .pill.confirm { color: var(--ink); background: rgba(255,255,255,.52); border-color: rgba(16, 18, 24, .20); }
 
-    /* ── Brand ── */
-    .brand-kit { display: grid; grid-template-columns: 1fr 1.6fr; gap: 18px; }
-    .brand-tile {
-      position: relative;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--bg-2);
-      padding: 28px;
-      display: grid;
-      place-items: center;
-      min-height: 240px;
-      overflow: hidden;
+    /* Verdict variants inside the terminal */
+    .code-line .verdict.deny {
+      background: linear-gradient(120deg, #d83f6a 0%, #7042e8 100%);
+      box-shadow: 0 8px 22px rgba(216, 63, 106, .28);
     }
-    .brand-tile.compact { background: radial-gradient(circle at 30% 30%, rgba(51,226,192,.10), transparent 55%), radial-gradient(circle at 70% 70%, rgba(138,76,255,.12), transparent 55%), var(--bg-2); }
-    .brand-tile.compact img { max-width: 260px; width: 100%; filter: drop-shadow(0 12px 36px rgba(138, 76, 255, .25)); }
-    .brand-tile.wide img { width: 100%; }
+
+    /* ── Needle / Meet the sentry ── */
+    .needle-kit {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(280px, .85fr);
+      gap: 36px;
+      align-items: stretch;
+    }
+    .needle-stage {
+      position: relative;
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+      overflow: visible;
+      min-height: 380px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .needle-stage::before {
+      content: "";
+      position: absolute;
+      left: 50%; top: 52%;
+      width: 70%;
+      aspect-ratio: 1 / 1;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(112, 66, 232, .22), transparent 62%);
+      filter: blur(18px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .needle-stage::after {
+      content: "";
+      position: absolute;
+      left: 50%; bottom: 8%;
+      transform: translateX(-50%);
+      width: 56%; height: 20px;
+      background: radial-gradient(ellipse at center, rgba(16, 18, 24, .18), transparent 70%);
+      filter: blur(10px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .needle-hero {
+      position: relative;
+      width: min(86%, 360px);
+      filter: drop-shadow(0 22px 32px rgba(112, 66, 232, .28)) drop-shadow(0 6px 12px rgba(0, 169, 143, .18));
+      animation: needleFloat 6s ease-in-out infinite;
+      transform-origin: 60% 90%;
+      z-index: 1;
+    }
+    .needle-stage:hover .needle-hero { animation-play-state: paused; transform: translateY(-6px) rotate(-2deg); transition: transform .4s ease; }
+    .needle-tag {
+      position: absolute;
+      top: 8px; left: 8px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .82);
+      border: 1px solid var(--line-strong);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 10.5px; font-weight: 600;
+      letter-spacing: .14em; text-transform: uppercase;
+      color: var(--ink);
+      backdrop-filter: blur(6px);
+      z-index: 2;
+    }
+    .needle-tag .dot-cyan { animation-duration: 3s; }
+    .needle-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 18px;
+    }
+    .needle-copy .lead {
+      font-size: 17px;
+      line-height: 1.55;
+      color: var(--ink);
+      letter-spacing: -.01em;
+    }
+    .needle-copy .lead strong { font-weight: 600; }
+    .needle-traits {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .trait {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: baseline;
+      gap: 14px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(247,244,237,.35));
+      transition: transform .25s ease, border-color .25s ease, background .25s ease;
+    }
+    .trait:hover { transform: translateY(-2px); border-color: rgba(112, 66, 232, .35); background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(247,244,237,.6)); }
+    .trait .verdict-tag {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 10.5px; font-weight: 700;
+      letter-spacing: .14em;
+      padding: 4px 9px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .trait.allow .verdict-tag { color: #062923; background: var(--cyan); }
+    .trait.escalate .verdict-tag { color: var(--ink); background: rgba(255, 255, 255, .82); border: 1px solid var(--line-strong); }
+    .trait.block .verdict-tag { color: white; background: var(--violet); }
+    .trait p { color: var(--ink-soft); font-size: 14.5px; line-height: 1.5; }
+    .trait p b { color: var(--ink); font-weight: 600; }
+
+    @keyframes needleFloat {
+      0%, 100% { transform: translateY(0) rotate(-1.2deg); }
+      50%      { transform: translateY(-10px) rotate(1.2deg); }
+    }
 
     /* ── CTA ── */
     .cta { padding-bottom: 64px; }
@@ -375,8 +504,8 @@
       border: 1px solid var(--line-strong);
       border-radius: var(--radius);
       background:
-        radial-gradient(800px circle at 100% 0%, rgba(138, 76, 255, .18), transparent 60%),
-        radial-gradient(700px circle at 0% 100%, rgba(51, 226, 192, .12), transparent 60%),
+        radial-gradient(800px circle at 100% 0%, rgba(112, 66, 232, .13), transparent 60%),
+        radial-gradient(700px circle at 0% 100%, rgba(0, 169, 143, .13), transparent 60%),
         var(--bg-2);
       overflow: hidden;
     }
@@ -402,9 +531,9 @@
 
     /* ── Animations ── */
     @keyframes pulse {
-      0%   { box-shadow: 0 0 0 0 rgba(51, 226, 192, .55); }
-      70%  { box-shadow: 0 0 0 10px rgba(51, 226, 192, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(51, 226, 192, 0); }
+      0%   { box-shadow: 0 0 0 0 rgba(0, 169, 143, .38); }
+      70%  { box-shadow: 0 0 0 10px rgba(0, 169, 143, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 169, 143, 0); }
     }
     @keyframes shine {
       0%, 100% { background-position: 0% 50%; }
@@ -420,7 +549,8 @@
       .features { grid-template-columns: 1fr; }
       .feature { border-right: 0; }
       .flow { grid-template-columns: 1fr; }
-      .brand-kit { grid-template-columns: 1fr; }
+      .needle-kit { grid-template-columns: 1fr; }
+      .needle-stage { min-height: 320px; }
       .nav-links a:not(.nav-cta) { display: none; }
     }
     @media (max-width: 560px) {
@@ -442,7 +572,7 @@
         <a href="#layer">Security</a>
         <a href="#flow">Flow</a>
         <a href="#policy">Policy</a>
-        <a href="#brand">Brand</a>
+        <a href="#needle">Needle</a>
         <a href="/home" class="nav-cta">Open guard</a>
       </div>
     </div>
@@ -453,10 +583,9 @@
       <div class="container">
         <div class="hero-grid">
           <div>
-            <div class="eyebrow reveal"><span class="dot-cyan"></span> MCP execution firewall · Solana</div>
-            <h1 class="reveal d1">A <span class="accent">security layer</span> for AI agents on Solana. <em>Not a wallet.</em></h1>
+            <h1 class="reveal d1">The <span class="accent">execution firewall</span> for Solana AI agents.</h1>
             <p class="hero-copy reveal d2">
-              Compass sits between agents, MCP clients, users and execution. Every critical action is decoded, simulated, evaluated against policy and audited — before it can be signed.
+              Compass sits between AI agents, tools and wallets to decode, simulate, approve and audit critical actions before they can be signed.
             </p>
             <div class="hero-actions reveal d3">
               <a href="/home" class="btn btn-primary">Open Compass</a>
@@ -465,13 +594,13 @@
             <p class="hero-note mono reveal d4">Built for transfers, swaps and conditional orders.</p>
           </div>
 
-          <div class="banner reveal d2">
-            <img src="/compass-banner.png" alt="Compass · security layer for AI execution on Solana" />
+          <div class="hero-mascot reveal d2">
+            <img src="/needle-mascot.png" alt="Needle, the Compass execution sentry mascot" />
           </div>
         </div>
 
         <div class="strip">
-          <div class="stat reveal"><div class="k">Tool boundary</div><div class="v">MCP calls pass through Compass first</div></div>
+          <div class="stat reveal"><div class="k">Tool boundary</div><div class="v">Agent tool calls pass through Compass first</div></div>
           <div class="stat reveal d1"><div class="k">Risk engine</div><div class="v">Wallet, token, protocol, amount</div></div>
           <div class="stat reveal d2"><div class="k">Policy gates</div><div class="v">Limits, denylist, slippage, cadence</div></div>
           <div class="stat reveal d3"><div class="k">Audit trail</div><div class="v">Decision, reason, approval, execution</div></div>
@@ -484,7 +613,7 @@
         <div class="section-head reveal">
           <div class="kicker">Security layer · not custody</div>
           <h2>Wallets hold keys. Compass controls what reaches them.</h2>
-          <p>An execution firewall that decides whether an AI-triggered operation is safe enough to be signed.</p>
+          <p>Compass does not replace Phantom, Dynamic, Privy or Turnkey. It guards the execution path <em>before</em> those wallets are asked to sign.</p>
         </div>
         <div class="features">
           <article class="feature reveal d1">
@@ -522,14 +651,14 @@
               <span class="tdot"></span><span class="tdot"></span><span class="tdot on"></span>
               <span class="tlabel">compass · guard.log</span>
             </div>
-            <div class="code-line"><b>intent</b><span>send 2.5 SOL to 8rQ…x1</span></div>
-            <div class="code-line"><b>decode</b><span class="info">system transfer · native SOL</span></div>
-            <div class="code-line"><b>risk</b><span>new destination · above soft limit</span></div>
-            <div class="code-line"><b>policy</b><span>require explicit approval + memo</span></div>
-            <div class="code-line"><b>verdict</b><span class="verdict">permit · reinforced</span><span class="caret"></span></div>
+            <div class="code-line"><b>agent</b><span>swap 2 SOL → unknown token (9Fk…q7)</span></div>
+            <div class="code-line"><b>decode</b><span class="info">jupiter swap · output token unverified</span></div>
+            <div class="code-line"><b>risk</b><span>rug-risk signals · liquidity &lt; 5k</span></div>
+            <div class="code-line"><b>policy</b><span>slippage 14% · exceeds 3% cap</span></div>
+            <div class="code-line"><b>verdict</b><span class="verdict deny">blocked · token risk + slippage</span><span class="caret"></span></div>
           </div>
           <div class="steps">
-            <div class="step reveal d1"><strong>Agent proposes action</strong><span>Compass receives the MCP / tool call instead of letting it execute directly.</span></div>
+            <div class="step reveal d1"><strong>Agent proposes action</strong><span>Compass receives the tool call instead of letting it execute directly against the wallet.</span></div>
             <div class="step reveal d2"><strong>Simulation &amp; decoding</strong><span>The transaction is interpreted in human terms against network and protocol context.</span></div>
             <div class="step reveal d3"><strong>Policy verdict</strong><span>Allow, block or escalate — with a clear reason and suggested next action.</span></div>
             <div class="step reveal d4"><strong>Approval &amp; audit</strong><span>Only approved operations proceed; every decision is written to an audit trail.</span></div>
@@ -555,16 +684,37 @@
       </div>
     </section>
 
-    <section id="brand">
+    <section id="needle">
       <div class="container">
         <div class="section-head reveal">
-          <div class="kicker">Identity</div>
-          <h2>One mark for the guardrail layer.</h2>
-          <p>The landing leads with the Compass mark and the security-layer banner. No wallet metaphor.</p>
+          <div class="kicker">Meet the sentry</div>
+          <h2>Meet Needle, your execution sentry.</h2>
+          <p>Needle is the Compass sentry that watches every critical agent action before it reaches your wallet.</p>
         </div>
-        <div class="brand-kit">
-          <div class="brand-tile compact reveal"><img src="/compass-logo-mark.png" alt="Compass logo" /></div>
-          <div class="brand-tile wide reveal d1"><img src="/compass-banner.png" alt="Compass banner" /></div>
+        <div class="needle-kit">
+          <div class="needle-stage reveal">
+            <span class="needle-tag"><span class="dot-cyan"></span> on guard</span>
+            <img class="needle-hero" src="/needle-mascot-welcome.png" alt="Needle, the Compass execution sentry mascot, welcoming with open arms" />
+          </div>
+          <div class="needle-copy reveal d1">
+            <p class="lead">
+              Needle watches every critical agent action before it reaches your wallet. It <strong>allows</strong> safe operations, <strong>escalates</strong> uncertain ones and <strong>blocks</strong> actions that violate your policy.
+            </p>
+            <div class="needle-traits">
+              <div class="trait allow">
+                <span class="verdict-tag">ALLOW</span>
+                <p><b>Safe by default.</b> Routine transfers and swaps within your limits flow through without friction.</p>
+              </div>
+              <div class="trait escalate">
+                <span class="verdict-tag">ESCALATE</span>
+                <p><b>Ask before signing.</b> New destinations, unusual amounts or fresh tokens require a reinforced confirmation.</p>
+              </div>
+              <div class="trait block">
+                <span class="verdict-tag">BLOCK</span>
+                <p><b>Stop with a reason.</b> Rug-risk tokens, scam wallets and policy violations never reach the signer.</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -572,7 +722,7 @@
     <section class="cta">
       <div class="container">
         <div class="cta-box reveal">
-          <div class="kicker">Compass MCP Guard</div>
+          <div class="kicker">Compass execution guard</div>
           <h2>Let agents act — without letting them bypass your rules.</h2>
           <p>Put Compass in front of every critical Solana operation and make safety the default execution path.</p>
           <div class="hero-actions">
@@ -586,7 +736,7 @@
 
   <footer>
     <div class="container footer-inner">
-      <span>© 2026 Compass · Security layer for AI execution on Solana.</span>
+      <span>© 2026 Compass · The execution firewall for Solana AI agents.</span>
       <a href="/home">Launch app →</a>
     </div>
   </footer>
