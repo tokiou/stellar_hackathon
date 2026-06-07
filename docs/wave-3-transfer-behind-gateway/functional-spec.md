@@ -145,17 +145,17 @@ La implementación actual de Wave 3 cablea gateway/policy/audit dentro de `back/
 
 Esto contradice la dirección de producto en `docs/PRODUCT_CONSTITUTION.md` (Compass MCP Guard / execution firewall, no chatbot DeFi). El boundary real debería ser un tool/MCP gateway independiente, con `chat.ts` como adapter legacy temporal o retirado.
 
-Wave 3 queda mergeada con esta deuda explícita: una migración posterior debe mover el flujo guarded transfer (y futuros swap/conditional) a un servicio dedicado de tool boundary, dejar `chat.ts` aislado en `legacy/` si ya no se usa, y reorientar los tests hacia ese boundary nuevo.
+Wave 3 queda mergeada con esta deuda explícita: Wave 4 debe mover el flujo guarded transfer a un servicio dedicado de MCP/tool boundary, dejar `chat.ts` aislado en `legacy/`, y reorientar los tests hacia ese boundary nuevo.
 
 ## Non-goals
 
-- Migrar swaps detrás del gateway (Wave 4).
-- Migrar conditional orders detrás del gateway (Wave 4).
-- Cambiar el modelo de signer o mover private keys al backend (Wave 5+ explícito; no hacerlo aquí).
+- Migrar swaps detrás del gateway (Wave 5).
+- Migrar conditional orders detrás del gateway (Wave 5).
+- Cambiar el modelo de signer o mover private keys al backend (Wave 6+ explícito; no hacerlo aquí).
 - Auto-ejecutar transfers con `ALLOW`; Wave 3 preserva approval card.
 - Crear durable audit storage pesado/DB nueva si no existe soporte mínimo.
 - Cambiar contratos on-chain del guard o redeploy de programas.
-- Construir MCP server público/compat mode (Wave 6).
+- Construir compatibilidad MCP upstream/passthrough amplia (Wave 7). Wave 4 sólo crea el MCP server/tool boundary first-party mínimo.
 
 ## Acceptance criteria global
 

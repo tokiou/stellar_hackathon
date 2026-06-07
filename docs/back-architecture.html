@@ -327,10 +327,10 @@
               <td>Keep as known risk; no code action in this wave.</td>
             </tr>
             <tr>
-              <td><code>Waves 4–7</code></td>
-              <td><span class="tag todo">not specified</span></td>
-              <td>No folders for tool boundary, signer adapter, swap/conditional behind gateway, MCP server.</td>
-              <td>Create next spec: <code>docs/wave-4-tool-boundary/</code>.</td>
+              <td><code>Waves 4–8</code></td>
+              <td><span class="tag todo">partially specified</span></td>
+              <td>Wave 4 MCP server is now being specified; signer adapter, swap/conditional, compatibility, and demo hardening still need follow-up specs.</td>
+              <td>Create next spec: <code>docs/wave-4-mcp-server/</code>, then follow with Wave 5+ specs.</td>
             </tr>
           </tbody>
         </table>
@@ -356,7 +356,7 @@
         <p>These are not regressions; they are the next blockers to turn the backend core into a product surface.</p>
       </div>
       <div class="grid cols-3">
-        <article class="card"><span class="tag risk">blocker</span><h3>No MCP/tool boundary</h3><p>No active API/MCP entrypoint consumes <code>transferGateway</code>. The guard is a library until Wave 4 adds the boundary.</p></article>
+        <article class="card"><span class="tag risk">blocker</span><h3>No MCP/tool boundary</h3><p>No active API/MCP entrypoint consumes <code>transferGateway</code>. Wave 4 now targets a first-party MCP server/tool boundary.</p></article>
         <article class="card"><span class="tag warn">runtime debt</span><h3>Audit is in-memory</h3><p><code>transferAuditLog.ts</code> is bounded and useful for tests/dev, but not durable enough for real audit requirements.</p></article>
         <article class="card"><span class="tag warn">test debt</span><h3>On-chain integration tests</h3><p>Backend unit tests pass, but Anchor flows still need real integration coverage or a deterministic local validator suite.</p></article>
         <article class="card"><span class="tag warn">scope decision</span><h3>Conditional escrow</h3><p>The program remains active under <code>back/solana/</code>, while its old app/keeper wiring lives in <code>legacy/</code>.</p></article>
@@ -374,7 +374,7 @@
         <table>
           <thead><tr><th>Priority</th><th>Spec folder</th><th>Purpose</th></tr></thead>
           <tbody>
-            <tr><td>1</td><td><code>docs/wave-4-tool-boundary/</code></td><td>Define MCP server or HTTP tool boundary, <code>tools/list</code>, <code>tools/call</code>, and how it invokes transfer guard without legacy chat.</td></tr>
+            <tr><td>1</td><td><code>docs/wave-4-mcp-server/</code></td><td>Define the first-party MCP server/tool boundary, <code>tools/list</code>, <code>tools/call</code>, and how it invokes transfer guard without legacy chat.</td></tr>
             <tr><td>2</td><td><code>docs/onchain-approval/</code></td><td>Document PDA derivation, account parsing, proof validation, and readiness checks.</td></tr>
             <tr><td>3</td><td><code>docs/wallet-safety-validation/</code></td><td>Document action hash, recipient checks, attestation model, and policy inputs.</td></tr>
             <tr><td>4</td><td><code>docs/price-quote/</code></td><td>Document devnet quote source, fallback behavior, error codes, and mainnet constraints.</td></tr>

@@ -260,7 +260,7 @@ Deuda concreta:
 - El LLM, cuando se use, debe ser parte de la capa de seguridad (intent mismatch, prompt injection, explicación de riesgo), no de un chat de producto.
 - Tests primarios de transfer guard deberían vivir contra el servicio del tool boundary, no contra `chat.test.ts`.
 
-Wave 3 se mergea con esta deuda anotada; una wave posterior (análisis legacy + migración a tool boundary) debe limpiarla antes de seguir agregando flujos detrás del gateway.
+Wave 3 se mergea con esta deuda anotada; Wave 4 (MCP server/tool boundary) debe limpiarla antes de seguir agregando swap o conditional detrás del gateway.
 
 ## Rollout notes
 

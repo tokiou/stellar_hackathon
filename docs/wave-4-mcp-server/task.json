@@ -1,0 +1,93 @@
+{
+  "id": "wave-4-mcp-server",
+  "title": "Wave 4 — MCP server and tool boundary",
+  "status": "planned",
+  "branch": "feature/wave-4-mcp-server",
+  "baseBranch": "release/compass_migration",
+  "goal": "Expose the existing Compass MCP Guard backend core through a first-party MCP server/tool boundary before adding more mutating flows.",
+  "context": {
+    "whyNow": "After Wave 3.5, the active backend is a clean guard core but has no agent-facing entrypoint. Existing swap/conditional/signer work should wait until agents can only reach guarded tools through Compass.",
+    "productSource": "docs/PRODUCT_CONSTITUTION.md",
+    "relatedDocs": [
+      "docs/compass-monad-on-solana/mvp-migration-plan.md",
+      "docs/back-architecture.html",
+      "docs/wave-3-transfer-behind-gateway/functional-spec.md",
+      "docs/wave-3-transfer-behind-gateway/technical-spec.md"
+    ],
+    "relatedCode": [
+      "back/services/executionGateway.ts",
+      "back/services/executionGatewayContracts.ts",
+      "back/services/policy/policyEngine.ts",
+      "back/services/transferGateway.ts",
+      "back/services/transferGatewayContracts.ts",
+      "back/services/transferAuditLog.ts",
+      "back/services/priceQuote.ts"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Define MCP tool contracts",
+      "status": "pending",
+      "description": "Create dedicated contracts/types for Compass MCP tools, registry entries, tool-call input, and stable tool-call results. Keep types separate from behavior."
+    },
+    {
+      "id": "T2",
+      "title": "Implement first-party tool registry",
+      "status": "pending",
+      "description": "List the initial Compass-controlled tools: quote/read, guarded transfer, deny-only direct signing. Ensure tools/list cannot expose raw signer or legacy chat tools."
+    },
+    {
+      "id": "T3",
+      "title": "Implement pure tools/call router",
+      "status": "pending",
+      "description": "Route calls through classification, policy/transfer gateway, result builders, and audit behavior without adding MCP transport complexity first."
+    },
+    {
+      "id": "T4",
+      "title": "Add backend tests for MCP decisions",
+      "status": "pending",
+      "description": "Cover ALLOW quote, REQUIRE_HUMAN_APPROVAL transfer, DENY direct signing, DENY unknown mutating tool, invalid transfer input, and no legacy imports."
+    },
+    {
+      "id": "T5",
+      "title": "Add local MCP server entrypoint",
+      "status": "pending",
+      "description": "Add the minimal server/transport wrapper once pure registry/router tests are green. Keep it local/dev-only until demo evidence exists."
+    },
+    {
+      "id": "T6",
+      "title": "Document manual MCP evidence",
+      "status": "pending",
+      "description": "Record how to run tools/list and tools/call locally, including one allow, one require-approval, and one deny outcome."
+    },
+    {
+      "id": "T7",
+      "title": "Validate and review",
+      "status": "pending",
+      "description": "Run npm run test:back, npm run lint, npx tsc --noEmit --pretty false, and a fresh reviewer before merging into release/compass_migration."
+    }
+  ],
+  "acceptanceCriteria": [
+    "MCP tool registry lists only Compass-controlled tools for this wave.",
+    "tools/call produces ALLOW, REQUIRE_HUMAN_APPROVAL, and DENY outcomes through the existing guard primitives.",
+    "guarded_transfer_sol uses evaluateTransferGateway rather than legacy chat orchestration.",
+    "direct signing/raw send calls are denied fail-closed.",
+    "No active module imports from legacy/.",
+    "Backend tests cover the first-party MCP router behavior."
+  ],
+  "nonGoals": [
+    "SignerAdapter implementation",
+    "Swap/conditional migration",
+    "Broad upstream MCP compatibility mode",
+    "Durable audit storage",
+    "Private-key custody",
+    "Legacy chat reactivation"
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false",
+    "Manual MCP evidence once the server entrypoint exists"
+  ]
+}

@@ -68,8 +68,8 @@ Direcciones devnet en [`docs/onchain-deployments.md`](../docs/onchain-deployment
 
 ## Pendientes (post Wave 3.5)
 
-- **Tool boundary dedicado.** El transfer guard hoy se invoca a través de helpers, no de un MCP server. Próxima wave: definir el entrypoint MCP/tool boundary que el agente consume.
-- **Swap y conditional behind gateway** (Wave 4 según el migration plan).
-- **Signer adapter explícito** (Wave 5).
+- **Tool boundary dedicado / MCP server** (Wave 4). El transfer guard hoy se invoca a través de helpers, no de un MCP server. Próxima wave: definir el entrypoint MCP/tool boundary que el agente consume.
+- **Swap y conditional behind gateway** (Wave 5 según el migration plan).
+- **Signer adapter explícito** (Wave 6).
 - **Audit persistente.** Hoy es in-memory bounded; cuando haga falta retención, agregar una sink durable.
 - **README/docs nuevos** cuando aterricen las próximas waves.

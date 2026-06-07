@@ -208,9 +208,41 @@ Verification:
 - `npm run test:back`
 - `npm test` if UI behavior changes.
 
-### Wave 4 — Swap and conditional flows behind gateway
+### Wave 4 — MCP server and tool boundary
 
-Purpose: apply the same model to higher-risk existing flows.
+Purpose: expose the existing Compass guard core as the agent-facing boundary before adding more flows.
+
+Why this was promoted: after Wave 3.5, `back/services/*` is a clean MCP Guard core but no active entrypoint consumes it. Swap/conditional work should not be added until agents can only reach guarded tools through Compass.
+
+Tasks:
+
+- Add a local TypeScript MCP server entrypoint or isolated module.
+- Implement `tools/list` for first-party Compass tools.
+- Implement `tools/call` interception for the initial tool set:
+  - read/preparation tool: quote or safe read;
+  - guarded mutating tool: transfer evaluation through `evaluateTransferGateway`;
+  - blocked signing tool: direct `sign_and_send_transaction` style call.
+- Add a minimal tool registry and adapter boundary that does not import from `legacy/`.
+- Emit audit events for allow / require approval / deny decisions.
+- Keep external upstream MCP passthrough out of scope unless explicitly isolated and tested.
+
+Acceptance:
+
+- An AI host or MCP test harness can call Compass `tools/list`.
+- `tools/call` can return at least one `ALLOW`, one `REQUIRE_HUMAN_APPROVAL`, and one `DENY` outcome.
+- Mutating actions go through policy/approval checks and cannot directly access raw signer tools.
+- No `legacy/` import is introduced.
+
+Verification:
+
+- Backend tests for registry, list, call interception, and fail-closed behavior.
+- `npm run test:back`
+- `npm run lint`
+- Manual local evidence for `tools/list` and the three `tools/call` outcomes when the server entrypoint exists.
+
+### Wave 5 — Swap and conditional flows behind gateway
+
+Purpose: apply the same model to higher-risk existing flows after the MCP/tool boundary exists.
 
 Tasks:
 
@@ -221,17 +253,16 @@ Tasks:
 
 Acceptance:
 
-- Existing swap and conditional order flows remain usable.
+- Existing swap and conditional order capabilities are represented as guarded tools, not legacy chat flows.
 - High-slippage or unknown-token actions deny or require approval based on policy.
 - Conditional execution remains policy-bound and auditable.
 
 Verification:
 
 - `npm run test:back`
-- `npm test` if proposal card/UI changes.
 - `npm run lint`
 
-### Wave 5 — Approval and signer adapter boundary
+### Wave 6 — Approval and signer adapter boundary
 
 Purpose: make signing rules explicit and future-proof.
 
@@ -254,35 +285,33 @@ Verification:
 - `npm run test:back`
 - `npm test` if approval UI changes.
 
-### Wave 6 — MCP Guard v0 compatibility mode
+### Wave 7 — MCP compatibility and upstream hardening
 
-Purpose: expose Compass as the agent-facing tool boundary.
+Purpose: extend the Wave 4 first-party MCP server into compatibility mode for mirrored or upstream tools.
 
 Tasks:
 
-- Add local MCP server entrypoint or isolated package/module.
-- Implement `tools/list` for safe Compass tools.
-- Implement `tools/call` interceptor.
-- Start with one integration path:
-  - current Compass transfer/quote tools, or
-  - Solana Agent Kit MCP, or
-  - Jupiter quote/swap flow.
-- Add no-bypass setup docs.
-- Keep MCP Guard disabled or isolated until demo-ready.
+- Add upstream MCP client integration only after first-party tools are stable.
+- Mirror a small allowlisted external tool set behind Compass-prefixed names.
+- Add no-bypass setup docs for Claude/Cursor/Codex-style clients.
+- Keep unsafe upstream signer tools blocked unless Compass built and approved the action.
+- Add redacted audit examples for upstream/mirrored tools.
 
 Acceptance:
 
-- An AI host can call Compass tools through MCP.
-- Read/preparation actions can be allowed and audited.
-- Mutating actions go through policy/approval and cannot directly access raw signer tools.
-- Unsafe or unknown tools block by default.
+- An AI host can use Compass as the configured MCP server rather than connecting directly to raw execution MCPs.
+- Mirrored read/preparation tools can be allowed and audited.
+- Mirrored mutating tools still pass through policy/approval.
+- Unsafe or unknown upstream tools block by default.
 
 Verification:
 
-- Backend tests for interceptor behavior.
-- Manual demo evidence for `tools/list` and three `tools/call` outcomes.
+- Backend tests for upstream registry/interceptor behavior.
+- `npm run test:back`
+- `npm run lint`
+- Manual demo evidence for compatibility-mode `tools/list` and `tools/call`.
 
-### Wave 7 — Demo hardening
+### Wave 8 — Demo hardening
 
 Purpose: make the MVP reviewable and demoable.
 
@@ -321,11 +350,12 @@ All PRs in this chain should target `release/compass_migration`, not `main`.
 | PR B | `feature/wave-1-gateway-contracts`   | Wave 1  | `release/compass_migration` | Gateway contracts and tests. |
 | PR C | `feature/wave-2-policy-engine`       | Wave 2  | `release/compass_migration` | Policy engine v0 and tests.  |
 | PR D | `feature/wave-3-transfer-gateway`    | Wave 3  | `release/compass_migration` | Transfer migration.          |
-| PR E | `feature/wave-4-swap-gateway`        | Wave 4a | `release/compass_migration` | Swap migration.              |
-| PR F | `feature/wave-4-conditional-gateway` | Wave 4b | `release/compass_migration` | Conditional order migration. |
-| PR G | `feature/wave-5-signer-idempotency`  | Wave 5  | `release/compass_migration` | Signer adapter/idempotency.  |
-| PR H | `feature/wave-6-mcp-guard-v0`        | Wave 6  | `release/compass_migration` | MCP Guard v0.                |
-| PR I | `feature/wave-7-demo-hardening`      | Wave 7  | `release/compass_migration` | Demo hardening and runbook.  |
+| PR E | `feature/wave-4-mcp-server`          | Wave 4  | `release/compass_migration` | MCP server/tool boundary.    |
+| PR F | `feature/wave-5-swap-gateway`        | Wave 5a | `release/compass_migration` | Swap migration.              |
+| PR G | `feature/wave-5-conditional-gateway` | Wave 5b | `release/compass_migration` | Conditional order migration. |
+| PR H | `feature/wave-6-signer-idempotency`  | Wave 6  | `release/compass_migration` | Signer adapter/idempotency.  |
+| PR I | `feature/wave-7-mcp-compatibility`   | Wave 7  | `release/compass_migration` | Upstream MCP compatibility.  |
+| PR J | `feature/wave-8-demo-hardening`      | Wave 8  | `release/compass_migration` | Demo hardening and runbook.  |
 
 Split any PR forecasted over 400 changed lines before implementation.
 

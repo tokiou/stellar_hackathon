@@ -52,10 +52,10 @@ Permitir que cualquier acción agentica sobre Solana pase por una capa de decisi
 ### Fuera de alcance
 
 - Conectar el engine a `back/services/chat.ts` o a tools concretas (eso es Wave 3).
-- Cambiar el flujo de aprobación UI (Wave 5).
+- Cambiar el flujo de aprobación UI / signer boundary (Wave 6).
 - Almacenamiento en DB o on-chain de políticas (futuro, no MVP).
 - Multi-tenant policies o policies por usuario (futuro).
-- Risk scoring numérico (Wave 4+ y posterior).
+- Risk scoring numérico (Wave 5+ y posterior; Wave 4 se enfoca en MCP server/tool boundary).
 - Bridges: contemplados en el schema, pero solo con default conservador, sin reglas finas (no es MVP demo).
 
 ## Casos de decisión
