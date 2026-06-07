@@ -7,18 +7,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint app front/src back/services",
+    "lint": "eslint app back/services",
     "lint:legacy": "eslint --config eslint.legacy.config.js legacy",
     "test": "vitest --run",
     "test:back": "vitest --config vitest.back.config.ts --run",
     "test:legacy": "vitest --config vitest.legacy.config.ts --run",
     "test:watch": "vitest",
     "bootstrap:conditional": "node scripts/bootstrap-conditional-devnet.mjs",
-    "dev:front": "next dev",
-    "dev:back": "next dev",
-    "build:front": "next build",
-    "test:front": "vitest --run",
-    "lint:front": "eslint front/src"
+    "dev:back": "next dev"
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",
