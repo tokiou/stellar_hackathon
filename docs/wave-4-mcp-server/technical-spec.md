@@ -24,6 +24,7 @@ Use dedicated files and keep types/contracts separate from behavior.
 ```txt
 back/services/mcp/
 ├── mcpServer.ts              # server/transport wiring, if runtime dependency is added
+├── mcpServerContracts.ts     # server handler/dependency contracts
 ├── mcpToolRegistry.ts        # list of exposed Compass tools
 ├── mcpToolContracts.ts       # tool definitions, result types, schemas
 ├── mcpToolCallRouter.ts      # tools/call dispatcher
@@ -41,7 +42,7 @@ Preferred path:
 2. Add an MCP SDK/transport only after the pure router tests pass.
 3. Keep transport code thin and adapter-like.
 
-If an MCP SDK is added, document the package and why it is needed. Do not add broad upstream MCP passthrough in this wave.
+The local stdio entrypoint uses `@modelcontextprotocol/sdk` as a direct runtime dependency so Compass can expose spec-compatible `tools/list` and `tools/call` handlers through `Server` + `StdioServerTransport` while keeping transport code thin. The dev command uses `tsx` to run the TypeScript-only local entrypoint without adding a backend build pipeline. Do not add broad upstream MCP passthrough in this wave.
 
 ## Tool registry contract
 
@@ -57,10 +58,10 @@ Each tool definition should include:
 
 Initial registry:
 
-| Tool | Backend dependency |
-| ---- | ------------------ |
-| `get_usdc_sol_quote` | `back/services/priceQuote.ts` |
-| `guarded_transfer_sol` | `back/services/transferGateway.ts` |
+| Tool                        | Backend dependency                    |
+| --------------------------- | ------------------------------------- |
+| `get_usdc_sol_quote`        | `back/services/priceQuote.ts`         |
+| `guarded_transfer_sol`      | `back/services/transferGateway.ts`    |
 | `sign_and_send_transaction` | no execution adapter; deny-only entry |
 
 ## `tools/list`

@@ -28,12 +28,12 @@ This wave exists because `back/services/*` is currently a clean library/core, bu
 
 ## Initial tool set
 
-| Tool | Risk class | Expected default behavior |
-| ---- | ---------- | ------------------------- |
-| `get_usdc_sol_quote` | read/preparation | `ALLOW` + audit |
-| `guarded_transfer_sol` | sensitive execution | evaluates through `transferGateway`; may return `REQUIRE_HUMAN_APPROVAL`, `DENY`, or additional context |
-| `sign_and_send_transaction` | signing | `DENY` unless a later signer-adapter wave proves Compass-built approval metadata |
-| unknown mutating tool | blocked/unknown | `DENY` fail-closed |
+| Tool                        | Risk class          | Expected default behavior                                                                               |
+| --------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `get_usdc_sol_quote`        | read/preparation    | `ALLOW` + audit                                                                                         |
+| `guarded_transfer_sol`      | sensitive execution | evaluates through `transferGateway`; may return `REQUIRE_HUMAN_APPROVAL`, `DENY`, or additional context |
+| `sign_and_send_transaction` | signing             | `DENY` unless a later signer-adapter wave proves Compass-built approval metadata                        |
+| unknown mutating tool       | blocked/unknown     | `DENY` fail-closed                                                                                      |
 
 The exact public names may be adjusted during implementation, but the behavior above is required.
 

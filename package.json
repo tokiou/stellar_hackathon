@@ -13,7 +13,8 @@
     "test:back": "vitest --config vitest.back.config.ts --run",
     "test:legacy": "vitest --config vitest.legacy.config.ts --run",
     "test:watch": "vitest --config vitest.back.config.ts",
-    "bootstrap:conditional:legacy": "node legacy/scripts/bootstrap-conditional-devnet.mjs"
+    "bootstrap:conditional:legacy": "node legacy/scripts/bootstrap-conditional-devnet.mjs",
+    "mcp:dev": "tsx back/services/mcp/mcpServer.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",
@@ -24,6 +25,7 @@
     "@langchain/core": "^0.3.29",
     "@langchain/langgraph": "^0.2.39",
     "@langchain/openai": "^0.3.17",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@orca-so/common-sdk": "^0.7.0",
     "@orca-so/whirlpools": "^7.0.2",
     "@orca-so/whirlpools-sdk": "^0.20.0",
@@ -104,6 +106,7 @@
     "postcss": "^8.4.35",
     "sharp": "^0.34.5",
     "tailwindcss": "^3.4.11",
+    "tsx": "^4.22.4",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.1",
