@@ -59,10 +59,10 @@ npx tsc --noEmit           # typecheck
 
 ## Programas Anchor
 
-| Programa                  | Path                                | Rol                                                                         |
-| ------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| `agent-action-guard`      | `back/solana/agent-action-guard/`   | Approvals, attestations y enforcement on-chain de transfers/swaps guardados.|
-| `conditional-escrow-buy`  | `back/solana/conditional-escrow-buy/` | Conditional buy SOL via oracle (Pyth) y escrow devnet.                     |
+| Programa                 | Path                                  | Rol                                                                          |
+| ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------- |
+| `agent-action-guard`     | `back/solana/agent-action-guard/`     | Approvals, attestations y enforcement on-chain de transfers/swaps guardados. |
+| `conditional-escrow-buy` | `back/solana/conditional-escrow-buy/` | Conditional buy SOL via oracle (Pyth) y escrow devnet.                       |
 
 Direcciones devnet en [`docs/onchain-deployments.md`](../docs/onchain-deployments.md).
 

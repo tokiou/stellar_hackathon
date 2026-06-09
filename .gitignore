@@ -45,6 +45,7 @@ pnpm-debug.log*
 .cache
 *.tsbuildinfo
 progress.md
+tmp/
 
 # Anchor/Solana build artifacts
 **/target/

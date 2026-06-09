@@ -35,19 +35,19 @@ From the constitution:
 
 ## Current assets to reuse
 
-| Asset                                              | Why it matters                                    |
-| -------------------------------------------------- | ------------------------------------------------- |
-| `legacy/front/src/hooks/useWallet.ts`                     | Legacy Solana signing/send path to study before building a new signer adapter. |
+| Asset                                                     | Why it matters                                                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `legacy/front/src/hooks/useWallet.ts`                     | Legacy Solana signing/send path to study before building a new signer adapter.  |
 | `legacy/front/src/hooks/useAgentMessage.ts`               | Legacy approve/reject/result loop to study before building the new approval UI. |
-| `legacy/front/src/providers/DynamicWalletProvider.tsx`    | Legacy Dynamic Solana wallet auth reference.                                   |
-| `legacy/back/services/chat.ts`                            | Legacy action proposal/orchestration entrypoint.                               |
-| `legacy/back/services/tools/transfer.ts`                  | Legacy transfer validation baseline.                                           |
-| `legacy/back/services/tools/orcaSwap.ts`, `orcaSwapTx.ts` | Legacy quote/swap baseline.                                                    |
-| `legacy/back/services/tools/conditionalBuySol.ts`         | Legacy conditional execution baseline.                                         |
-| `back/services/walletSafetyValidation.ts`          | Existing risk/policy/attestation logic.           |
-| `back/services/onchainApproval.ts`                 | PDA/on-chain approval logic.                      |
-| `back/solana/agent-action-guard/*`                 | On-chain guard enforcement direction.             |
-| `back/solana/conditional-escrow-buy/*`             | Semi-autonomous conditional execution direction.  |
+| `legacy/front/src/providers/DynamicWalletProvider.tsx`    | Legacy Dynamic Solana wallet auth reference.                                    |
+| `legacy/back/services/chat.ts`                            | Legacy action proposal/orchestration entrypoint.                                |
+| `legacy/back/services/tools/transfer.ts`                  | Legacy transfer validation baseline.                                            |
+| `legacy/back/services/tools/orcaSwap.ts`, `orcaSwapTx.ts` | Legacy quote/swap baseline.                                                     |
+| `legacy/back/services/tools/conditionalBuySol.ts`         | Legacy conditional execution baseline.                                          |
+| `back/services/walletSafetyValidation.ts`                 | Existing risk/policy/attestation logic.                                         |
+| `back/services/onchainApproval.ts`                        | PDA/on-chain approval logic.                                                    |
+| `back/solana/agent-action-guard/*`                        | On-chain guard enforcement direction.                                           |
+| `back/solana/conditional-escrow-buy/*`                    | Semi-autonomous conditional execution direction.                                |
 
 ## Architecture target
 

@@ -10,16 +10,16 @@ This folder contains the active product and migration documentation for **Compas
 
 ## Active migration docs
 
-| Area | Path | Notes |
-| ---- | ---- | ----- |
-| Product constitution | [`PRODUCT_CONSTITUTION.md`](PRODUCT_CONSTITUTION.md) | Canonical product definition for Compass MCP Guard. |
-| Migration proposal / plan | [`compass-monad-on-solana/`](compass-monad-on-solana/) | High-level migration from the old Solana app into Compass MCP Guard. |
-| Wave 2 policy engine | [`wave-2-policy-engine/`](wave-2-policy-engine/) | Functional/technical specs and tasks for the policy engine. |
-| Wave 3 transfer gateway | [`wave-3-transfer-behind-gateway/`](wave-3-transfer-behind-gateway/) | Transfer evaluation behind the execution gateway. |
-| Wave 3.5 legacy isolation | [`wave-3.5-legacy-isolation/`](wave-3.5-legacy-isolation/) | Plan, inventory, and review notes for moving old chat-product code under `legacy/`. |
-| Wave 4 MCP server | [`wave-4-mcp-server/`](wave-4-mcp-server/) | First-party MCP server/tool boundary for Compass-controlled tools. |
-| Backend architecture | [`back-architecture.html`](back-architecture.html) | Current post-Wave-3.5 backend modules, flow, spec gaps, tests, and debts. |
-| On-chain deployments | [`onchain-deployments.md`](onchain-deployments.md) | Devnet program IDs and deployment notes. |
+| Area                      | Path                                                                 | Notes                                                                               |
+| ------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Product constitution      | [`PRODUCT_CONSTITUTION.md`](PRODUCT_CONSTITUTION.md)                 | Canonical product definition for Compass MCP Guard.                                 |
+| Migration proposal / plan | [`compass-monad-on-solana/`](compass-monad-on-solana/)               | High-level migration from the old Solana app into Compass MCP Guard.                |
+| Wave 2 policy engine      | [`wave-2-policy-engine/`](wave-2-policy-engine/)                     | Functional/technical specs and tasks for the policy engine.                         |
+| Wave 3 transfer gateway   | [`wave-3-transfer-behind-gateway/`](wave-3-transfer-behind-gateway/) | Transfer evaluation behind the execution gateway.                                   |
+| Wave 3.5 legacy isolation | [`wave-3.5-legacy-isolation/`](wave-3.5-legacy-isolation/)           | Plan, inventory, and review notes for moving old chat-product code under `legacy/`. |
+| Wave 4 MCP server         | [`wave-4-mcp-server/`](wave-4-mcp-server/)                           | First-party MCP server/tool boundary for Compass-controlled tools.                  |
+| Backend architecture      | [`back-architecture.html`](back-architecture.html)                   | Current post-Wave-3.5 backend modules, flow, spec gaps, tests, and debts.           |
+| On-chain deployments      | [`onchain-deployments.md`](onchain-deployments.md)                   | Devnet program IDs and deployment notes.                                            |
 
 ## What moved to `legacy/`
 

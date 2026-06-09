@@ -28,13 +28,13 @@ Demostrar que Compass controla una acción mutante real antes de la firma:
 
 ## Actores
 
-| Actor | Rol |
-| --- | --- |
-| Usuario | Solicita transferencia y aprueba/rechaza desde la UI. |
-| Agente/LLM | Propone la tool call `transfer`; no firma ni ejecuta. |
-| Compass backend | Valida params, evalúa wallet safety, gateway/policy, crea proposals y construye unsigned tx. |
-| Frontend wallet | Firma/envía la transacción solo después de aprobación Compass. |
-| Audit consumer futuro | Consumirá eventos estructurados de proposal, approval, submission y result. |
+| Actor                 | Rol                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| Usuario               | Solicita transferencia y aprueba/rechaza desde la UI.                                        |
+| Agente/LLM            | Propone la tool call `transfer`; no firma ni ejecuta.                                        |
+| Compass backend       | Valida params, evalúa wallet safety, gateway/policy, crea proposals y construye unsigned tx. |
+| Frontend wallet       | Firma/envía la transacción solo después de aprobación Compass.                               |
+| Audit consumer futuro | Consumirá eventos estructurados de proposal, approval, submission y result.                  |
 
 ## Comportamiento actual
 
