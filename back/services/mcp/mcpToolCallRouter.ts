@@ -6,6 +6,8 @@ import {
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
 import * as priceQuote from "../priceQuote";
 import type { UsdcSolQuoteQuery } from "../priceQuote";
+import * as swapGateway from "../swapGateway";
+import type { EvaluateSwapGatewayInput } from "../swapGatewayContracts";
 import * as transferGateway from "../transferGateway";
 import type { EvaluateTransferGatewayInput } from "../transferGatewayContracts";
 import { recordMcpAuditEvent } from "./mcpAuditSink";
@@ -77,6 +79,7 @@ export async function handleMcpToolCall(
 
 	switch (registryEntry.name) {
 		case MCP_TOOL_NAMES.GET_USDC_SOL_QUOTE:
+		case MCP_TOOL_NAMES.QUOTE_SWAP:
 			return handleQuoteTool(
 				registryEntry,
 				classification.reasonCodes,
@@ -84,6 +87,8 @@ export async function handleMcpToolCall(
 			);
 		case MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL:
 			return handleTransferTool(registryEntry, input.arguments);
+		case MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC:
+			return handleSwapTool(registryEntry, input.arguments);
 	}
 }
 
@@ -314,6 +319,122 @@ async function handleTransferTool(
 	});
 }
 
+async function handleSwapTool(
+	registryEntry: CompassMcpToolRegistryEntry,
+	args: Record<string, unknown> | undefined,
+): Promise<CompassMcpToolResult> {
+	const classification = classifyToolCall({
+		toolName: registryEntry.classificationToolName,
+		mutates: registryEntry.mutates,
+	});
+	const parsed = parseSwapInput(args);
+
+	if (parsed.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			result: "failed",
+			metadata: {
+				registeredTool: true,
+				validationErrors: parsed.reasonCodes,
+			},
+		});
+
+		return buildRequireAdditionalContextResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: parsed.reasonCodes,
+			message: "Compass requires valid swap amount, slippage, protocol, and token context.",
+			auditId,
+		});
+	}
+
+	const evaluation = await swapGateway.evaluateSwapGateway({
+		...parsed.value,
+		toolName: registryEntry.classificationToolName,
+	});
+	const decision = evaluation.policyEvaluation.decision;
+	const reasonCodes = evaluation.policyEvaluation.reasonCodes;
+	const auditId = emitMcpAudit({
+		publicToolName: registryEntry.name,
+		actionKind: registryEntry.actionKind,
+		classification: evaluation.classification,
+		decision,
+		result: decision === COMPASS_DECISIONS.DENY ? "denied" : "pending",
+		network: parsed.value.network,
+		metadata: {
+			registeredTool: true,
+			policyId: evaluation.policyEvaluation.policyId,
+			policyReasonCodes: reasonCodes,
+			evaluatedRules: evaluation.policyEvaluation.evaluatedRules,
+			proposalEligible: evaluation.proposalEligible,
+			requiresApprovalCard: evaluation.requiresApprovalCard,
+			failClosedReason: evaluation.failClosedReason,
+			gatewayCandidateId: evaluation.metadata.candidateId,
+			candidateFingerprint: evaluation.metadata.candidateFingerprint,
+			contextFingerprint: evaluation.metadata.contextFingerprint,
+			protocol: parsed.value.protocol,
+			slippageBps: parsed.value.slippageBps,
+			tokenKnown: parsed.value.tokenKnown,
+		},
+		params: {
+			inputToken: parsed.value.inputToken,
+			outputToken: parsed.value.outputToken,
+			inputAmount: parsed.value.inputAmount,
+			slippageBps: parsed.value.slippageBps,
+			protocol: parsed.value.protocol,
+			tokenMint: parsed.value.tokenMint,
+		},
+	});
+
+	if (decision === COMPASS_DECISIONS.ALLOW) {
+		return buildAllowResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes,
+			data: buildSwapResultData(evaluation),
+			approval: {
+				required: evaluation.requiresApprovalCard,
+				metadata: evaluation.requiresApprovalCard
+					? evaluation.metadata
+					: undefined,
+			},
+			auditId,
+		});
+	}
+
+	if (decision === COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL) {
+		return buildRequireApprovalResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes,
+			data: buildSwapResultData(evaluation),
+			approval: { required: true, metadata: evaluation.metadata },
+			auditId,
+		});
+	}
+
+	if (decision === COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT) {
+		return buildRequireAdditionalContextResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes,
+			data: buildSwapResultData(evaluation),
+			auditId,
+		});
+	}
+
+	return buildDenyResult({
+		toolName: registryEntry.name,
+		riskClass: registryEntry.metadata.riskClass,
+		reasonCodes,
+		data: buildSwapResultData(evaluation),
+		auditId,
+	});
+}
+
 function parseQuoteInput(
 	args: Record<string, unknown> | undefined,
 ):
@@ -417,10 +538,128 @@ function parseTransferInput(
 	return { ok: true, value: input };
 }
 
+function parseSwapInput(
+	args: Record<string, unknown> | undefined,
+):
+	| { ok: true; value: EvaluateSwapGatewayInput }
+	| { ok: false; reasonCodes: string[] } {
+	if (!args) {
+		return { ok: false, reasonCodes: ["INVALID_SWAP_INPUT"] };
+	}
+
+	const inputToken = args.input_token;
+	const outputToken = args.output_token;
+	const inputAmount = args.input_amount;
+	const slippageBps = args.slippage_bps;
+	const protocol = args.protocol;
+	const tokenKnown = args.token_known;
+	const tokenMint = args.token_mint;
+
+	if (
+		typeof inputToken !== "string" ||
+		inputToken.trim().length === 0 ||
+		typeof outputToken !== "string" ||
+		outputToken.trim().length === 0 ||
+		typeof inputAmount !== "number" ||
+		!Number.isFinite(inputAmount) ||
+		inputAmount <= 0 ||
+		typeof slippageBps !== "number" ||
+		!Number.isFinite(slippageBps) ||
+		slippageBps < 0 ||
+		typeof protocol !== "string" ||
+		protocol.trim().length === 0 ||
+		typeof tokenKnown !== "boolean" ||
+		typeof tokenMint !== "string" ||
+		tokenMint.trim().length === 0
+	) {
+		return { ok: false, reasonCodes: ["INVALID_SWAP_INPUT"] };
+	}
+
+	const network =
+		typeof args.network === "string" ? args.network : DEFAULT_NETWORK;
+	const normalizedInputToken = inputToken.toUpperCase();
+	const normalizedOutputToken = outputToken.toUpperCase();
+
+	if (!isSupportedSolUsdcSwapPair(normalizedInputToken, normalizedOutputToken)) {
+		return { ok: false, reasonCodes: ["UNSUPPORTED_SWAP_PAIR"] };
+	}
+
+	const input: EvaluateSwapGatewayInput = {
+		network,
+		inputToken: normalizedInputToken,
+		outputToken: normalizedOutputToken,
+		inputAmount,
+		slippageBps,
+		protocol,
+		tokenKnown,
+		tokenMint,
+		quoteUsd: async () => quoteSwapAmountUsd({
+			network,
+			inputToken: normalizedInputToken,
+			outputToken: normalizedOutputToken,
+			inputAmount,
+			slippageBps,
+		}),
+	};
+
+	if (typeof args.actorWallet === "string") {
+		input.actorWallet = args.actorWallet;
+	}
+
+	return { ok: true, value: input };
+}
+
+function isSupportedSolUsdcSwapPair(
+	inputToken: string,
+	outputToken: string,
+): boolean {
+	return (
+		(inputToken === "SOL" && outputToken === "USDC") ||
+		(inputToken === "USDC" && outputToken === "SOL")
+	);
+}
+
+async function quoteSwapAmountUsd(input: {
+	network: string;
+	inputToken: string;
+	outputToken: string;
+	inputAmount: number;
+	slippageBps: number;
+}) {
+	if (input.inputToken === "USDC" && input.outputToken === "SOL") {
+		return { amountUsd: input.inputAmount, source: "stable_usdc_input" };
+	}
+
+	if (input.inputToken !== "SOL" || input.outputToken !== "USDC") {
+		return undefined;
+	}
+
+	const quote = await priceQuote.getUsdcSolQuote({
+		network: input.network,
+		input_token: "SOL",
+		output_token: "USDC",
+		input_amount: input.inputAmount,
+		slippage_bps: input.slippageBps,
+	});
+
+	return { amountUsd: quote.output_amount, source: quote.quote_source };
+}
+
 function buildTransferResultData(
 	evaluation: Awaited<
 		ReturnType<typeof transferGateway.evaluateTransferGateway>
 	>,
+): Record<string, unknown> {
+	return {
+		proposalEligible: evaluation.proposalEligible,
+		requiresApprovalCard: evaluation.requiresApprovalCard,
+		failClosedReason: evaluation.failClosedReason,
+		policyId: evaluation.policyEvaluation.policyId,
+	};
+}
+
+function buildSwapResultData(
+	evaluation: Awaited<ReturnType<typeof swapGateway.evaluateSwapGateway>>,
 ): Record<string, unknown> {
 	return {
 		proposalEligible: evaluation.proposalEligible,

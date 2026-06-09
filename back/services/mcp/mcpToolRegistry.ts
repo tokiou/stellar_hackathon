@@ -34,6 +34,31 @@ const GUARDED_TRANSFER_SOL_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
+const GUARDED_SWAP_SOL_USDC_SCHEMA = {
+	type: "object",
+	properties: {
+		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
+		actorWallet: { type: "string" },
+		input_token: { type: "string", enum: ["SOL", "USDC"] },
+		output_token: { type: "string", enum: ["SOL", "USDC"] },
+		input_amount: { type: "number", exclusiveMinimum: 0 },
+		slippage_bps: { type: "number", minimum: 0 },
+		protocol: { type: "string" },
+		token_known: { type: "boolean" },
+		token_mint: { type: "string" },
+	},
+	required: [
+		"input_token",
+		"output_token",
+		"input_amount",
+		"slippage_bps",
+		"protocol",
+		"token_known",
+		"token_mint",
+	],
+	additionalProperties: false,
+} as const;
+
 const SIGN_AND_SEND_TRANSACTION_SCHEMA = {
 	type: "object",
 	properties: {},
@@ -56,6 +81,20 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 		mutates: false,
 	},
 	{
+		name: MCP_TOOL_NAMES.QUOTE_SWAP,
+		description:
+			"Get a swap quote through Compass as preparation/simulation data.",
+		inputSchema: USDC_SOL_QUOTE_SCHEMA,
+		metadata: {
+			riskClass: TOOL_RISK_CLASSES.PREPARATION_SIMULATION,
+			executionKind: MCP_TOOL_EXECUTION_KINDS.READ_PREPARATION,
+			readOnly: true,
+		},
+		classificationToolName: MCP_TOOL_NAMES.QUOTE_SWAP,
+		actionKind: "quote_swap",
+		mutates: false,
+	},
+	{
 		name: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
 		description:
 			"Prepare a guarded SOL transfer through Compass policy, transfer guard, and audit.",
@@ -67,6 +106,20 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 		},
 		classificationToolName: "transfer",
 		actionKind: "transfer",
+		mutates: true,
+	},
+	{
+		name: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+		description:
+			"Prepare a guarded swap through Compass policy, swap guard, and audit.",
+		inputSchema: GUARDED_SWAP_SOL_USDC_SCHEMA,
+		metadata: {
+			riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION,
+			executionKind: MCP_TOOL_EXECUTION_KINDS.SENSITIVE_EXECUTION,
+			readOnly: false,
+		},
+		classificationToolName: "swap",
+		actionKind: "swap",
 		mutates: true,
 	},
 	{

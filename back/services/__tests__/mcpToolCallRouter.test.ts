@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
+import type { SwapGatewayEvaluation } from "../swapGatewayContracts";
 import type { TransferGatewayEvaluation } from "../transferGatewayContracts";
 
 async function loadMcpToolCallRouter() {
@@ -24,6 +25,64 @@ async function loadMcpToolContracts() {
 			`Wave 4 MCP tool contracts implementation is missing or not loadable: ${String(error)}`,
 		);
 	}
+}
+
+function mockSwapEvaluation(
+	overrides: Partial<SwapGatewayEvaluation> = {},
+): SwapGatewayEvaluation {
+	return {
+		classification: {
+			toolName: "swap",
+			riskClass: "SENSITIVE_EXECUTION",
+			defaultDecision: COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+			auditRequired: true,
+			reasonCodes: ["KNOWN_SENSITIVE_EXECUTION_TOOL"],
+		},
+		candidate: {
+			id: "swap-candidate-1",
+			chain: "solana",
+			network: "devnet",
+			toolName: "swap",
+			actionKind: "swap",
+			actorWallet: "actor-wallet",
+			createdAt: "2026-06-08T00:00:00.000Z",
+			paramsSummary: {
+				inputToken: "SOL",
+				outputToken: "USDC",
+				inputAmount: 1,
+				slippageBps: 500,
+				protocol: "Orca",
+				tokenMint: "usdc-mint",
+			},
+		},
+		policyContext: {
+			amount_usd: 140,
+			slippage_bps: 500,
+			protocol: "Orca",
+			token_known: true,
+			token_mint: "usdc-mint",
+		},
+		policyEvaluation: {
+			decision: COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+			policyId: "default-conservative",
+			reasonCodes: ["SWAP_SLIPPAGE_EXCEEDS_LIMIT"],
+			evaluatedRules: ["swaps.max_slippage_bps"],
+		},
+		metadata: {
+			candidateId: "swap-candidate-1",
+			candidateFingerprint: "swap-candidate-fingerprint",
+			policyId: "default-conservative",
+			decision: COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+			reasonCodes: ["SWAP_SLIPPAGE_EXCEEDS_LIMIT"],
+			evaluatedRules: ["swaps.max_slippage_bps"],
+			classificationReasonCodes: ["KNOWN_SENSITIVE_EXECUTION_TOOL"],
+			contextFingerprint: "swap-context-fingerprint",
+			evaluatedAt: "2026-06-08T00:00:00.000Z",
+		},
+		proposalEligible: true,
+		requiresApprovalCard: true,
+		...overrides,
+	};
 }
 
 function mockTransferEvaluation(
@@ -141,6 +200,187 @@ describe("Wave 4 MCP tool call router", () => {
 				slippage_bps: 100,
 			}),
 		);
+	});
+
+	it("returns ALLOW swap quote results with audit id", async () => {
+		const priceQuote = await import("../priceQuote");
+		vi.spyOn(priceQuote, "getUsdcSolQuote").mockResolvedValueOnce({
+			network: "devnet",
+			provider: "orca_whirlpools_devnet",
+			input_token: "SOL",
+			output_token: "USDC",
+			input_amount: 1,
+			output_amount: 140,
+			input_mint: "sol-mint",
+			output_mint: "usdc-mint",
+			slippage_bps: 100,
+			route_context: "unit-test-route",
+			quote_source: "fallback_sol_usd",
+			updated_at: "2026-06-08T00:00:00.000Z",
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.QUOTE_SWAP,
+			arguments: {
+				network: "devnet",
+				input_token: "SOL",
+				output_token: "USDC",
+				input_amount: 1,
+				slippage_bps: 100,
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			decision: COMPASS_DECISIONS.ALLOW,
+			toolName: MCP_TOOL_NAMES.QUOTE_SWAP,
+			riskClass: "PREPARATION_SIMULATION",
+		});
+		expect(result.auditId).toEqual(expect.any(String));
+		expect(result.data).toMatchObject({ output_amount: 140 });
+		expect(priceQuote.getUsdcSolQuote).toHaveBeenCalledWith(
+			expect.objectContaining({
+				network: "devnet",
+				input_token: "SOL",
+				output_token: "USDC",
+				input_amount: 1,
+				slippage_bps: 100,
+			}),
+		);
+	});
+
+	it("returns REQUIRE_HUMAN_APPROVAL guarded swap results with approval metadata", async () => {
+		const priceQuote = await import("../priceQuote");
+		vi.spyOn(priceQuote, "getUsdcSolQuote").mockResolvedValueOnce({
+			network: "devnet",
+			provider: "orca_whirlpools_devnet",
+			input_token: "SOL",
+			output_token: "USDC",
+			input_amount: 1,
+			output_amount: 140,
+			input_mint: "sol-mint",
+			output_mint: "usdc-mint",
+			slippage_bps: 500,
+			route_context: "unit-test-route",
+			quote_source: "fallback_sol_usd",
+			updated_at: "2026-06-08T00:00:00.000Z",
+		});
+		const swapGateway = await import("../swapGateway");
+		const evaluateSpy = vi
+			.spyOn(swapGateway, "evaluateSwapGateway")
+			.mockResolvedValueOnce(mockSwapEvaluation());
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			arguments: {
+				network: "devnet",
+				actorWallet: "actor-wallet",
+				input_token: "SOL",
+				output_token: "USDC",
+				input_amount: 1,
+				slippage_bps: 500,
+				protocol: "Orca",
+				token_known: true,
+				token_mint: "usdc-mint",
+			},
+		});
+
+		expect(evaluateSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				toolName: "swap",
+				inputToken: "SOL",
+				outputToken: "USDC",
+				inputAmount: 1,
+				slippageBps: 500,
+				protocol: "Orca",
+				tokenKnown: true,
+				tokenMint: "usdc-mint",
+				quoteUsd: expect.any(Function),
+			}),
+		);
+		const swapGatewayInput = evaluateSpy.mock.calls[0]?.[0];
+		expect(await swapGatewayInput?.quoteUsd?.()).toEqual({
+			amountUsd: 140,
+			source: "fallback_sol_usd",
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			riskClass: "SENSITIVE_EXECUTION",
+			reasonCodes: ["SWAP_SLIPPAGE_EXCEEDS_LIMIT"],
+			approval: {
+				required: true,
+				metadata: {
+					candidateId: "swap-candidate-1",
+					policyId: "default-conservative",
+				},
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain("rawTransaction");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("returns REQUIRE_ADDITIONAL_CONTEXT for invalid guarded swap input", async () => {
+		const swapGateway = await import("../swapGateway");
+		const evaluateSpy = vi.spyOn(swapGateway, "evaluateSwapGateway");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			arguments: {
+				network: "devnet",
+				input_token: "SOL",
+				output_token: "USDC",
+				input_amount: 1,
+			},
+		});
+
+		expect(evaluateSpy).not.toHaveBeenCalled();
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			riskClass: "SENSITIVE_EXECUTION",
+		});
+		expect(result.reasonCodes).toContain("INVALID_SWAP_INPUT");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("returns REQUIRE_ADDITIONAL_CONTEXT for unsupported guarded swap pairs", async () => {
+		const swapGateway = await import("../swapGateway");
+		const evaluateSpy = vi.spyOn(swapGateway, "evaluateSwapGateway");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			arguments: {
+				network: "devnet",
+				input_token: "USDC",
+				output_token: "BONK",
+				input_amount: 1,
+				slippage_bps: 100,
+				protocol: "Orca",
+				token_known: true,
+				token_mint: "bonk-mint",
+			},
+		});
+
+		expect(evaluateSpy).not.toHaveBeenCalled();
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
+			riskClass: "SENSITIVE_EXECUTION",
+		});
+		expect(result.reasonCodes).toContain("UNSUPPORTED_SWAP_PAIR");
+		expect(result.auditId).toEqual(expect.any(String));
 	});
 
 	it("returns REQUIRE_HUMAN_APPROVAL transfer results with approval metadata", async () => {

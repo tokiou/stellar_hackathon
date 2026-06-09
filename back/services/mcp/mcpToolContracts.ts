@@ -2,11 +2,14 @@ import type {
 	CompassDecision,
 	ToolRiskClass,
 } from "../executionGatewayContracts";
+import type { SwapGatewayDecisionMetadata } from "../swapGatewayContracts";
 import type { TransferGatewayDecisionMetadata } from "../transferGatewayContracts";
 
 export const MCP_TOOL_NAMES = {
 	GET_USDC_SOL_QUOTE: "get_usdc_sol_quote",
+	QUOTE_SWAP: "quote_swap",
 	GUARDED_TRANSFER_SOL: "guarded_transfer_sol",
+	GUARDED_SWAP_SOL_USDC: "guarded_swap_sol_usdc",
 	SIGN_AND_SEND_TRANSACTION: "sign_and_send_transaction",
 } as const;
 
@@ -54,7 +57,7 @@ export type CompassMcpToolCallInput = {
 
 export type CompassMcpApproval = {
 	required: boolean;
-	metadata?: TransferGatewayDecisionMetadata;
+	metadata?: TransferGatewayDecisionMetadata | SwapGatewayDecisionMetadata;
 };
 
 export type CompassMcpToolResult = {

@@ -21,7 +21,7 @@ async function loadMcpToolContracts() {
 }
 
 describe("Wave 4 MCP tool registry", () => {
-	it("lists only the three initial Compass-controlled tools", async () => {
+	it("lists Compass-controlled transfer, swap, quote, and deny-only signing tools", async () => {
 		const { listMcpTools } = await loadMcpToolRegistry();
 		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
 
@@ -29,10 +29,28 @@ describe("Wave 4 MCP tool registry", () => {
 
 		expect(tools.map((tool) => tool.name)).toEqual([
 			MCP_TOOL_NAMES.GET_USDC_SOL_QUOTE,
+			MCP_TOOL_NAMES.QUOTE_SWAP,
 			MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
 			MCP_TOOL_NAMES.SIGN_AND_SEND_TRANSACTION,
 		]);
-		expect(tools).toHaveLength(3);
+		expect(tools).toHaveLength(5);
+		expect(
+			tools.find((tool) => tool.name === MCP_TOOL_NAMES.QUOTE_SWAP),
+		).toMatchObject({
+			metadata: {
+				riskClass: "PREPARATION_SIMULATION",
+				readOnly: true,
+			},
+		});
+		expect(
+			tools.find((tool) => tool.name === MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC),
+		).toMatchObject({
+			metadata: {
+				riskClass: "SENSITIVE_EXECUTION",
+				readOnly: false,
+			},
+		});
 	});
 
 	it("does not expose raw signer or private-key tools", async () => {
