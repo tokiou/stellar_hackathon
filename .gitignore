@@ -61,6 +61,7 @@ tmp/
 # Local agent/worktree state
 .claude/
 .codex/
+.octto/
 
 # Local env/secrets (examples stay allowed)
 .env.*

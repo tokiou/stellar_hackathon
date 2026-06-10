@@ -14,6 +14,7 @@ export const MCP_TOOL_NAMES = {
 	GUARDED_TRANSFER_SOL: "guarded_transfer_sol",
 	GUARDED_SWAP_SOL_USDC: "guarded_swap_sol_usdc",
 	CREATE_CONDITIONAL_BUY_SOL: "create_conditional_buy_sol",
+	EXECUTE_APPROVED_ACTION: "execute_approved_action",
 	SIGN_AND_SEND_TRANSACTION: "sign_and_send_transaction",
 } as const;
 

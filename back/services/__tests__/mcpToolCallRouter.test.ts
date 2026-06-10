@@ -3,8 +3,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
 import type { ConditionalGatewayEvaluation } from "../conditionalGatewayContracts";
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
+import { resetMcpAuditEvents } from "../mcp/mcpAuditSink";
 import type { SwapGatewayEvaluation } from "../swapGatewayContracts";
 import type { TransferGatewayEvaluation } from "../transferGatewayContracts";
 
@@ -218,6 +220,8 @@ function listTsFiles(path: string): string[] {
 describe("Wave 4 MCP tool call router", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		defaultApprovalIdempotencyStore.clear();
+		resetMcpAuditEvents();
 	});
 
 	it("returns ALLOW quote results with audit id", async () => {
@@ -665,6 +669,7 @@ describe("Wave 4 MCP tool call router", () => {
 			riskClass: "SIGNING",
 		});
 		expect(result.reasonCodes).toContain("DIRECT_SIGN_AND_SEND_BLOCKED");
+		expect(result.message).toContain("execute_approved_action");
 		expect(JSON.stringify(result)).not.toContain("must-not-leak");
 		expect(result.auditId).toEqual(expect.any(String));
 
@@ -672,6 +677,93 @@ describe("Wave 4 MCP tool call router", () => {
 		expect(JSON.stringify(listMcpAuditEvents().at(-1))).not.toContain(
 			"must-not-leak",
 		);
+	});
+
+	it("returns REQUIRE_ADDITIONAL_CONTEXT when execute_approved_action is missing candidateId", async () => {
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain("INVALID_EXECUTE_APPROVED_ACTION_INPUT");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("denies duplicate execute_approved_action candidate IDs before signer lookup", async () => {
+		defaultApprovalIdempotencyStore.consume("candidate-duplicate");
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: { candidateId: "candidate-duplicate" },
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+			reasonCodes: ["DUPLICATE_APPROVAL_EXECUTION"],
+		});
+		expect(result.auditId).toEqual(expect.any(String));
+
+		const { listMcpAuditEvents } = await import("../mcp/mcpAuditSink");
+		expect(listMcpAuditEvents().at(-1)).toMatchObject({
+			decision: COMPASS_DECISIONS.DENY,
+			metadata: {
+				candidateId: "candidate-duplicate",
+				duplicateBlocked: true,
+				signerPath: "not_reached",
+			},
+		});
+	});
+
+	it("denies execute_approved_action when local signer is not configured", async () => {
+		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: { candidateId: "candidate-ready" },
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+			reasonCodes: ["LOCAL_SIGNER_NOT_CONFIGURED"],
+			data: {
+				candidateId: "candidate-ready",
+				signerPath: "not_reached",
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain("rawTransaction");
+		expect(result.auditId).toEqual(expect.any(String));
+
+		const { listMcpAuditEvents } = await import("../mcp/mcpAuditSink");
+		expect(listMcpAuditEvents().at(-1)).toMatchObject({
+			decision: COMPASS_DECISIONS.DENY,
+			metadata: {
+				candidateId: "candidate-ready",
+				duplicateBlocked: false,
+				signerPath: "not_reached",
+			},
+		});
 	});
 
 	it("denies unknown mutating tools fail closed", async () => {

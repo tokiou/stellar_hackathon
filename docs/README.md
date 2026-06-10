@@ -6,7 +6,7 @@ This folder contains the active product and migration documentation for **Compas
 
 - [`PRODUCT_CONSTITUTION.md`](PRODUCT_CONSTITUTION.md) is the product source of truth.
 - Feature specs live in their own folders: `docs/<feature-name>/functional-spec.md`, `technical-spec.md`, and `task.json`.
-- Do not mirror the same proposal/spec/task in both `docs/` and `openspec/changes/` unless explicitly requested.
+- This repo uses `docs/` as the only canonical documentation tree. Do not create or mirror OpenSpec artifacts in `openspec/`.
 
 ## Active migration docs
 
@@ -18,6 +18,8 @@ This folder contains the active product and migration documentation for **Compas
 | Wave 3 transfer gateway   | [`wave-3-transfer-behind-gateway/`](wave-3-transfer-behind-gateway/) | Transfer evaluation behind the execution gateway.                                   |
 | Wave 3.5 legacy isolation | [`wave-3.5-legacy-isolation/`](wave-3.5-legacy-isolation/)           | Plan, inventory, and review notes for moving old chat-product code under `legacy/`. |
 | Wave 4 MCP server         | [`wave-4-mcp-server/`](wave-4-mcp-server/)                           | First-party MCP server/tool boundary for Compass-controlled tools.                  |
+| Wave 5 gateways           | [`wave-5-swap-gateway/`](wave-5-swap-gateway/), [`wave-5-conditional-gateway/`](wave-5-conditional-gateway/) | Swap and conditional-buy gateway specs.                                             |
+| Wave 6 signer adapter     | [`wave-6-signer-adapter/`](wave-6-signer-adapter/)                   | Signer adapter boundary, local devnet signer, idempotency, and execute tool.        |
 | Backend architecture      | [`back-architecture.html`](back-architecture.html)                   | Current post-Wave-3.5 backend modules, flow, spec gaps, tests, and debts.           |
 | On-chain deployments      | [`onchain-deployments.md`](onchain-deployments.md)                   | Devnet program IDs and deployment notes.                                            |
 
@@ -48,3 +50,5 @@ docs/<feature-name>/
 Use kebab-case feature names, for example `docs/mcp-tool-boundary/` or `docs/swap-behind-gateway/`.
 
 Root-level docs should be only cross-cutting documents, indices, or historical files that remain relevant to the MCP Guard direction.
+
+OpenSpec is intentionally not used in this repository. If a future workflow needs OpenSpec, first decide whether to migrate the canonical docs instead of duplicating them.

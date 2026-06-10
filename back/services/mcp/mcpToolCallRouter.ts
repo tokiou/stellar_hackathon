@@ -1,5 +1,6 @@
 import * as conditionalGateway from "../conditionalGateway";
 import type { EvaluateConditionalGatewayInput } from "../conditionalGatewayContracts";
+import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
 import {
 	buildAuditEvent,
 	classifyToolCall,
@@ -8,6 +9,7 @@ import {
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
 import * as priceQuote from "../priceQuote";
 import type { UsdcSolQuoteQuery } from "../priceQuote";
+import { createSignerAdapter } from "../signerAdapter";
 import * as swapGateway from "../swapGateway";
 import type { EvaluateSwapGatewayInput } from "../swapGatewayContracts";
 import * as transferGateway from "../transferGateway";
@@ -75,6 +77,10 @@ export async function handleMcpToolCall(
 		return denyRegisteredTool(registryEntry, classification.reasonCodes);
 	}
 
+	if (registryEntry.name === MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION) {
+		return handleExecuteApprovedActionTool(registryEntry, input.arguments);
+	}
+
 	if (classification.defaultDecision === COMPASS_DECISIONS.DENY) {
 		return denyRegisteredTool(registryEntry, classification.reasonCodes);
 	}
@@ -123,9 +129,178 @@ function denyRegisteredTool(
 		toolName: registryEntry.name,
 		riskClass: registryEntry.metadata.riskClass,
 		reasonCodes,
-		message: "Compass blocks direct signing or sending in Wave 4.",
+		message:
+			"Compass blocks direct sign_and_send_transaction. Route actions through guarded_transfer_sol, guarded_swap_sol_usdc, or create_conditional_buy_sol, then call execute_approved_action with the gateway candidate ID.",
 		auditId,
 	});
+}
+
+function handleExecuteApprovedActionTool(
+	registryEntry: CompassMcpToolRegistryEntry,
+	args: Record<string, unknown> | undefined,
+): CompassMcpToolResult {
+	const classification = classifyToolCall({
+		toolName: registryEntry.classificationToolName,
+		mutates: registryEntry.mutates,
+	});
+	const parsed = parseExecuteApprovedActionInput(args);
+
+	if (parsed.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			result: "failed",
+			metadata: {
+				registeredTool: true,
+				validationErrors: parsed.reasonCodes,
+				duplicateBlocked: false,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildRequireAdditionalContextResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: parsed.reasonCodes,
+			message: "Compass requires a valid gateway candidate ID to execute an approved action.",
+			auditId,
+		});
+	}
+
+	const consumed = defaultApprovalIdempotencyStore.consume(
+		parsed.value.candidateId,
+	);
+	if (consumed.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.DENY,
+			result: "denied",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: true,
+				approvalVerified: false,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildDenyResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: [consumed.reason],
+			message: "Compass blocked duplicate execution for this approved action candidate.",
+			data: {
+				candidateId: parsed.value.candidateId,
+				signerPath: "not_reached",
+			},
+			auditId,
+		});
+	}
+
+	const signer = createSignerAdapter({ rpcUrl: networkToRpcUrl(parsed.value.network) });
+	if (signer.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.DENY,
+			result: "denied",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: false,
+				approvalVerified: false,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildDenyResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: [signer.reason],
+			message: "Compass cannot execute this approved action because no local devnet signer is configured.",
+			data: {
+				candidateId: parsed.value.candidateId,
+				signerPath: "not_reached",
+			},
+			auditId,
+		});
+	}
+
+	const auditId = emitMcpAudit({
+		publicToolName: registryEntry.name,
+		actionKind: registryEntry.actionKind,
+		classification,
+		decision: COMPASS_DECISIONS.ALLOW,
+		result: "success",
+		network: parsed.value.network,
+		metadata: {
+			registeredTool: true,
+			candidateId: parsed.value.candidateId,
+			duplicateBlocked: false,
+			approvalVerified: false,
+			signerPath: "local_keypair",
+		},
+	});
+
+	return buildAllowResult({
+		toolName: registryEntry.name,
+		riskClass: registryEntry.metadata.riskClass,
+		reasonCodes: classification.reasonCodes,
+		message: "Compass approved this action for the local devnet signer boundary.",
+		data: {
+			candidateId: parsed.value.candidateId,
+			signerPath: "local_keypair",
+		},
+		auditId,
+	});
+}
+
+function parseExecuteApprovedActionInput(
+	args: Record<string, unknown> | undefined,
+):
+	| { ok: true; value: { candidateId: string; network: string } }
+	| { ok: false; reasonCodes: string[] } {
+	if (!args || typeof args.candidateId !== "string") {
+		return {
+			ok: false,
+			reasonCodes: ["INVALID_EXECUTE_APPROVED_ACTION_INPUT"],
+		};
+	}
+
+	const candidateId = args.candidateId.trim();
+	if (candidateId.length === 0) {
+		return {
+			ok: false,
+			reasonCodes: ["INVALID_EXECUTE_APPROVED_ACTION_INPUT"],
+		};
+	}
+
+	return {
+		ok: true,
+		value: {
+			candidateId,
+			network: typeof args.network === "string" ? args.network : DEFAULT_NETWORK,
+		},
+	};
+}
+
+function networkToRpcUrl(network: string): string {
+	if (network === "mainnet-beta") {
+		return "https://api.mainnet-beta.solana.com";
+	}
+
+	if (network === "testnet") {
+		return "https://api.testnet.solana.com";
+	}
+
+	return "https://api.devnet.solana.com";
 }
 
 async function handleQuoteTool(

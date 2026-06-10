@@ -76,6 +76,7 @@ describe("Wave 4 local MCP server entrypoint", () => {
 			"guarded_transfer_sol",
 			"guarded_swap_sol_usdc",
 			"create_conditional_buy_sol",
+			"execute_approved_action",
 			"sign_and_send_transaction",
 		]);
 		expect(JSON.stringify(response)).not.toMatch(

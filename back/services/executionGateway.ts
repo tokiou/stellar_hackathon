@@ -29,6 +29,7 @@ const SENSITIVE_EXECUTION_TOOLS = new Set([
 const SIGNING_TOOLS = new Set([
 	"sign_transaction",
 	"sign_and_send_transaction",
+	"execute_approved_action",
 ]);
 
 const SENSITIVE_KEY_PATTERN =
@@ -68,6 +69,8 @@ export function classifyToolCall(
 			reasonCodes:
 				toolName === "sign_and_send_transaction"
 					? ["DIRECT_SIGN_AND_SEND_BLOCKED"]
+					: toolName === "execute_approved_action"
+						? ["APPROVED_ACTION_EXECUTION"]
 					: ["DIRECT_SIGNING_TOOL"],
 		};
 	}
