@@ -122,6 +122,19 @@ const SIGN_AND_SEND_TRANSACTION_SCHEMA = {
 	additionalProperties: true,
 } as const;
 
+const EXECUTE_APPROVED_ACTION_SCHEMA = {
+	type: "object",
+	properties: {
+		candidateId: {
+			type: "string",
+			description: "Gateway candidate ID from the prior gateway evaluation.",
+		},
+		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
+	},
+	required: ["candidateId"],
+	additionalProperties: false,
+} as const;
+
 const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 	{
 		name: MCP_TOOL_NAMES.GET_USDC_SOL_QUOTE,
@@ -206,6 +219,20 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 		},
 		classificationToolName: "conditional_buy_sol",
 		actionKind: "conditional_buy",
+		mutates: true,
+	},
+	{
+		name: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+		description:
+			"Execute a Compass-approved action after a gateway candidate ID has passed Compass guardrails.",
+		inputSchema: EXECUTE_APPROVED_ACTION_SCHEMA,
+		metadata: {
+			riskClass: TOOL_RISK_CLASSES.SIGNING,
+			executionKind: MCP_TOOL_EXECUTION_KINDS.SENSITIVE_EXECUTION,
+			readOnly: false,
+		},
+		classificationToolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+		actionKind: "execute_approved_action",
 		mutates: true,
 	},
 	{

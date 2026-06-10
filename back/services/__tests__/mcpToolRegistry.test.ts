@@ -21,7 +21,7 @@ async function loadMcpToolContracts() {
 }
 
 describe("Wave 4 MCP tool registry", () => {
-	it("lists Compass-controlled transfer, swap, conditional, quote, and deny-only signing tools", async () => {
+	it("lists Compass-controlled transfer, swap, conditional, quote, execute, and deny-only signing tools", async () => {
 		const { listMcpTools } = await loadMcpToolRegistry();
 		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
 
@@ -34,9 +34,10 @@ describe("Wave 4 MCP tool registry", () => {
 			MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
 			MCP_TOOL_NAMES.GUARDED_SWAP_SOL_USDC,
 			MCP_TOOL_NAMES.CREATE_CONDITIONAL_BUY_SOL,
+			MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
 			MCP_TOOL_NAMES.SIGN_AND_SEND_TRANSACTION,
 		]);
-		expect(tools).toHaveLength(7);
+		expect(tools).toHaveLength(8);
 		expect(
 			tools.find((tool) => tool.name === MCP_TOOL_NAMES.QUOTE_SWAP),
 		).toMatchObject({
@@ -72,6 +73,18 @@ describe("Wave 4 MCP tool registry", () => {
 			metadata: {
 				riskClass: "SENSITIVE_EXECUTION",
 				readOnly: false,
+			},
+		});
+		expect(
+			tools.find((tool) => tool.name === MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION),
+		).toMatchObject({
+			metadata: {
+				riskClass: "SIGNING",
+				readOnly: false,
+			},
+			inputSchema: {
+				required: ["candidateId"],
+				additionalProperties: false,
 			},
 		});
 	});
