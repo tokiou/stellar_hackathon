@@ -83,8 +83,13 @@ describe("Wave 4 MCP tool registry", () => {
 				readOnly: false,
 			},
 			inputSchema: {
-				required: ["candidateId"],
+				required: ["candidateId", "approvalProof", "transactionPayload"],
 				additionalProperties: false,
+				properties: {
+					transactionPayload: {
+						required: ["encoding", "actionHash", "unsignedVersionedTransaction"],
+					},
+				},
 			},
 		});
 	});

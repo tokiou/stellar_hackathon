@@ -5,7 +5,23 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Keypair } from "@solana/web3.js";
+import bs58 from "bs58";
+import {
+	Connection,
+	Keypair,
+	TransactionMessage,
+	VersionedTransaction,
+} from "@solana/web3.js";
+
+function createUnsignedVersionedTransaction(payerKey: Keypair["publicKey"]) {
+	const message = new TransactionMessage({
+		payerKey,
+		recentBlockhash: Keypair.generate().publicKey.toBase58(),
+		instructions: [],
+	}).compileToV0Message();
+
+	return new VersionedTransaction(message);
+}
 
 describe("SignerAdapter interface", () => {
 	it("a class satisfying the interface compiles and getAddress is callable", async () => {
@@ -26,8 +42,10 @@ describe("SignerAdapter interface", () => {
 
 describe("createSignerAdapter", () => {
 	afterEach(() => {
+		vi.restoreAllMocks();
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 		delete process.env.SOLANA_RPC_URL;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
 	});
 
 	it("returns LOCAL_SIGNER_NOT_CONFIGURED when COMPASS_LOCAL_SIGNER_ENABLED is absent", async () => {
@@ -126,6 +144,7 @@ describe("LocalKeypairAdapter", () => {
 	afterEach(() => {
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 		delete process.env.SOLANA_RPC_URL;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
 	});
 
 	it("getAddress returns the correct base58 address for a test keypair", async () => {
@@ -183,6 +202,93 @@ describe("LocalKeypairAdapter", () => {
 		// Ensure no method returns or logs the secret key
 		const addressStr = await adapter.getAddress();
 		expect(addressStr).not.toContain(testKeypair.secretKey.toString());
+	});
+
+	it("signAndSendTransaction submits signed bytes through the Solana connection boundary", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+
+		const sendRawTransaction = vi
+			.spyOn(Connection.prototype, "sendRawTransaction")
+			.mockResolvedValue("real-devnet-signature" as never);
+		const testKeypair = Keypair.generate();
+		const tx = createUnsignedVersionedTransaction(testKeypair.publicKey);
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter({
+			localSecretKey: testKeypair.secretKey,
+			rpcUrl: "https://api.devnet.solana.com",
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected ok");
+		expect(result.adapter.signAndSendTransaction).toBeDefined();
+
+		const signature = await result.adapter.signAndSendTransaction?.(tx);
+
+		expect(signature).toBe("real-devnet-signature");
+		expect(signature).not.toBe("mock-signature");
+		expect(sendRawTransaction).toHaveBeenCalledTimes(1);
+		const [submittedBytes] = sendRawTransaction.mock.calls[0];
+		expect(submittedBytes).toBeInstanceOf(Uint8Array);
+		expect(submittedBytes.length).toBeGreaterThan(0);
+	});
+
+	it("returns ok with adapter when COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var provides secret key", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 = bs58.encode(
+			testKeypair.secretKey,
+		);
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter(); // No localSecretKey in config
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected ok");
+		expect(result.adapter).toBeDefined();
+		expect(typeof result.adapter.getAddress).toBe("function");
+		expect(typeof result.adapter.signTransaction).toBe("function");
+		const address = await result.adapter.getAddress();
+		expect(address).toBe(testKeypair.publicKey.toBase58());
+	});
+
+	it("returns LOCAL_SIGNER_NOT_CONFIGURED when both localSecretKey config and COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var are absent", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter(); // No localSecretKey, no env var
+
+		expect(result.ok).toBe(false);
+		if (result.ok !== false) throw new Error("expected failure");
+		expect(result.reason).toBe("LOCAL_SIGNER_NOT_CONFIGURED");
+	});
+
+	it("prefers localSecretKey config over COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		const configKeypair = Keypair.generate();
+		const envKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 = bs58.encode(
+			envKeypair.secretKey,
+		);
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter({
+			localSecretKey: configKeypair.secretKey,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected ok");
+		const address = await result.adapter.getAddress();
+		expect(address).toBe(configKeypair.publicKey.toBase58()); // Uses config key, not env var
 	});
 });
 

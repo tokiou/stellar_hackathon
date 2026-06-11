@@ -1,4 +1,5 @@
-import { Keypair, VersionedTransaction } from "@solana/web3.js";
+import { Keypair, VersionedTransaction, Connection } from "@solana/web3.js";
+import bs58 from "bs58";
 import {
 	SignerAdapter,
 	SignerAdapterConfig,
@@ -10,9 +11,11 @@ import {
 // Throws LOCAL_SIGNER_MAINNET_FORBIDDEN for any non-devnet RPC.
 export class LocalKeypairAdapter implements SignerAdapter {
 	private keypair: Keypair;
+	private connection: Connection;
 
-	constructor(secretKey: Uint8Array) {
+	constructor(secretKey: Uint8Array, rpcUrl: string) {
 		this.keypair = Keypair.fromSecretKey(secretKey);
+		this.connection = new Connection(rpcUrl);
 	}
 
 	async getAddress(): Promise<string> {
@@ -27,10 +30,21 @@ export class LocalKeypairAdapter implements SignerAdapter {
 	}
 
 	async signAndSendTransaction(tx: VersionedTransaction): Promise<string> {
-		// In a real implementation, this would submit to the network
-		// For now, we'll just sign and return a mock signature
-		this.signTransaction(tx);
-		return "mock-signature";
+		const signedTx = await this.signTransaction(tx);
+		const signature = await this.connection.sendRawTransaction(signedTx.serialize());
+		return signature;
+	}
+}
+
+// Resolve secret key from COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var (base58-encoded).
+// Returns undefined if the env var is absent or cannot be decoded.
+function resolveSecretKeyFromEnv(): Uint8Array | undefined {
+	const envKey = process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+	if (!envKey) return undefined;
+	try {
+		return new Uint8Array(bs58.decode(envKey));
+	} catch {
+		return undefined;
 	}
 }
 
@@ -48,12 +62,19 @@ export function createSignerAdapter(
 		return { ok: false, reason: "LOCAL_SIGNER_MAINNET_FORBIDDEN" };
 	}
 
-	if (!config?.localSecretKey) {
+	// Explicit config takes priority over env var fallback.
+	const secretKey = config?.localSecretKey ?? resolveSecretKeyFromEnv();
+
+	if (!secretKey) {
+		return { ok: false, reason: "LOCAL_SIGNER_NOT_CONFIGURED" };
+	}
+
+	if (!rpcUrl) {
 		return { ok: false, reason: "LOCAL_SIGNER_NOT_CONFIGURED" };
 	}
 
 	return {
 		ok: true,
-		adapter: new LocalKeypairAdapter(config.localSecretKey),
+		adapter: new LocalKeypairAdapter(secretKey, rpcUrl),
 	};
 }

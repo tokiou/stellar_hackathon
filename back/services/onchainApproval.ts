@@ -376,7 +376,7 @@ export async function verifyActionApproval(proof: OnchainActionApprovalProof): P
   if (!base.ok) return base;
 
   if (!proof.action_hash || !proof.user) {
-    return base;
+    return { ok: false, reason: 'INCOMPLETE_ACTION_APPROVAL_PROOF' };
   }
 
   const normalizedActionHash = normalizeActionHash(proof.action_hash);

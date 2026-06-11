@@ -1,5 +1,6 @@
 import * as conditionalGateway from "../conditionalGateway";
 import type { EvaluateConditionalGatewayInput } from "../conditionalGatewayContracts";
+import { VersionedTransaction } from "@solana/web3.js";
 import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
 import {
 	buildAuditEvent,
@@ -7,6 +8,8 @@ import {
 	createActionCandidate,
 } from "../executionGateway";
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
+import * as onchainApproval from "../onchainApproval";
+import type { OnchainActionApprovalProof } from "../onchainApproval";
 import * as priceQuote from "../priceQuote";
 import type { UsdcSolQuoteQuery } from "../priceQuote";
 import { createSignerAdapter } from "../signerAdapter";
@@ -20,6 +23,7 @@ import {
 	type CompassMcpToolCallInput,
 	type CompassMcpToolRegistryEntry,
 	type CompassMcpToolResult,
+	type ExecuteApprovedActionInput,
 } from "./mcpToolContracts";
 import { getMcpTool } from "./mcpToolRegistry";
 import {
@@ -31,6 +35,9 @@ import {
 
 const DEFAULT_NETWORK = "devnet";
 const MCP_AUDIT_ACTION_KIND_PREFIX = "mcp_tool_call";
+const MCP_SUPPORTED_NETWORKS = ["devnet", "testnet", "mainnet-beta"] as const;
+
+type McpSupportedNetwork = (typeof MCP_SUPPORTED_NETWORKS)[number];
 
 export async function handleMcpToolCall(
 	input: CompassMcpToolCallInput,
@@ -135,10 +142,10 @@ function denyRegisteredTool(
 	});
 }
 
-function handleExecuteApprovedActionTool(
+async function handleExecuteApprovedActionTool(
 	registryEntry: CompassMcpToolRegistryEntry,
 	args: Record<string, unknown> | undefined,
-): CompassMcpToolResult {
+): Promise<CompassMcpToolResult> {
 	const classification = classifyToolCall({
 		toolName: registryEntry.classificationToolName,
 		mutates: registryEntry.mutates,
@@ -169,41 +176,52 @@ function handleExecuteApprovedActionTool(
 		});
 	}
 
-	const consumed = defaultApprovalIdempotencyStore.consume(
-		parsed.value.candidateId,
-	);
-	if (consumed.ok === false) {
+	const proofBinding = validateApprovalProofBinding(parsed.value);
+	if (proofBinding.ok === false) {
 		const auditId = emitMcpAudit({
 			publicToolName: registryEntry.name,
 			actionKind: registryEntry.actionKind,
 			classification,
-			decision: COMPASS_DECISIONS.DENY,
-			result: "denied",
+			decision: proofBinding.decision,
+			result: proofBinding.decision === COMPASS_DECISIONS.DENY ? "denied" : "failed",
 			network: parsed.value.network,
 			metadata: {
 				registeredTool: true,
 				candidateId: parsed.value.candidateId,
-				duplicateBlocked: true,
+				duplicateBlocked: false,
 				approvalVerified: false,
 				signerPath: "not_reached",
+				validationErrors: proofBinding.reasonCodes,
 			},
 		});
 
-		return buildDenyResult({
+		if (proofBinding.decision === COMPASS_DECISIONS.DENY) {
+			return buildDenyResult({
+				toolName: registryEntry.name,
+				riskClass: registryEntry.metadata.riskClass,
+				reasonCodes: proofBinding.reasonCodes,
+				message: "Compass blocked execution because the approval proof does not match the transaction payload.",
+				data: {
+					candidateId: parsed.value.candidateId,
+					signerPath: "not_reached",
+				},
+				auditId,
+			});
+		}
+
+		return buildRequireAdditionalContextResult({
 			toolName: registryEntry.name,
 			riskClass: registryEntry.metadata.riskClass,
-			reasonCodes: [consumed.reason],
-			message: "Compass blocked duplicate execution for this approved action candidate.",
-			data: {
-				candidateId: parsed.value.candidateId,
-				signerPath: "not_reached",
-			},
+			reasonCodes: proofBinding.reasonCodes,
+			message: "Compass requires a complete approval proof with action hash and user before execution.",
 			auditId,
 		});
 	}
 
-	const signer = createSignerAdapter({ rpcUrl: networkToRpcUrl(parsed.value.network) });
-	if (signer.ok === false) {
+	const approval = await onchainApproval.verifyActionApproval(
+		parsed.value.approvalProof,
+	);
+	if (!approval.ok) {
 		const auditId = emitMcpAudit({
 			publicToolName: registryEntry.name,
 			actionKind: registryEntry.actionKind,
@@ -223,6 +241,71 @@ function handleExecuteApprovedActionTool(
 		return buildDenyResult({
 			toolName: registryEntry.name,
 			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: [approval.reason ?? "ONCHAIN_ACTION_APPROVAL_INVALID"],
+			message: "Compass blocked execution because on-chain approval proof verification failed.",
+			data: {
+				candidateId: parsed.value.candidateId,
+				signerPath: "not_reached",
+			},
+			auditId,
+		});
+	}
+	let unsignedTx: VersionedTransaction;
+	try {
+		unsignedTx = VersionedTransaction.deserialize(
+			Buffer.from(
+				parsed.value.transactionPayload.unsignedVersionedTransaction,
+				"base64",
+			),
+		);
+	} catch {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			result: "failed",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: false,
+				approvalVerified: true,
+				signerPath: "not_reached",
+				validationErrors: ["INVALID_TRANSACTION_PAYLOAD"],
+			},
+		});
+
+		return buildRequireAdditionalContextResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: ["INVALID_TRANSACTION_PAYLOAD"],
+			message: "Compass requires a valid unsigned VersionedTransaction payload to execute this approved action.",
+			auditId,
+		});
+	}
+
+	const signer = createSignerAdapter({ rpcUrl: networkToRpcUrl(parsed.value.network) });
+	if (signer.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.DENY,
+			result: "denied",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: false,
+				approvalVerified: true,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildDenyResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
 			reasonCodes: [signer.reason],
 			message: "Compass cannot execute this approved action because no local devnet signer is configured.",
 			data: {
@@ -233,6 +316,70 @@ function handleExecuteApprovedActionTool(
 		});
 	}
 
+	if (!signer.adapter.signAndSendTransaction) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.DENY,
+			result: "denied",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: false,
+				approvalVerified: true,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildDenyResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: ["LOCAL_SIGNER_NOT_CONFIGURED"],
+			message: "Compass cannot execute this approved action because the configured signer cannot submit transactions.",
+			data: {
+				candidateId: parsed.value.candidateId,
+				signerPath: "not_reached",
+			},
+			auditId,
+		});
+	}
+
+	const consumed = defaultApprovalIdempotencyStore.consume(
+		parsed.value.candidateId,
+	);
+	if (consumed.ok === false) {
+		const auditId = emitMcpAudit({
+			publicToolName: registryEntry.name,
+			actionKind: registryEntry.actionKind,
+			classification,
+			decision: COMPASS_DECISIONS.DENY,
+			result: "denied",
+			network: parsed.value.network,
+			metadata: {
+				registeredTool: true,
+				candidateId: parsed.value.candidateId,
+				duplicateBlocked: true,
+				approvalVerified: true,
+				signerPath: "not_reached",
+			},
+		});
+
+		return buildDenyResult({
+			toolName: registryEntry.name,
+			riskClass: registryEntry.metadata.riskClass,
+			reasonCodes: [consumed.reason],
+			message: "Compass blocked duplicate execution for this approved action candidate.",
+			data: {
+				candidateId: parsed.value.candidateId,
+				signerPath: "not_reached",
+			},
+			auditId,
+		});
+	}
+
+	const signature = await signer.adapter.signAndSendTransaction(unsignedTx);
 	const auditId = emitMcpAudit({
 		publicToolName: registryEntry.name,
 		actionKind: registryEntry.actionKind,
@@ -244,8 +391,10 @@ function handleExecuteApprovedActionTool(
 			registeredTool: true,
 			candidateId: parsed.value.candidateId,
 			duplicateBlocked: false,
-			approvalVerified: false,
+			approvalVerified: true,
 			signerPath: "local_keypair",
+			transactionSubmitted: true,
+			signature,
 		},
 	});
 
@@ -257,6 +406,7 @@ function handleExecuteApprovedActionTool(
 		data: {
 			candidateId: parsed.value.candidateId,
 			signerPath: "local_keypair",
+			signature,
 		},
 		auditId,
 	});
@@ -265,7 +415,7 @@ function handleExecuteApprovedActionTool(
 function parseExecuteApprovedActionInput(
 	args: Record<string, unknown> | undefined,
 ):
-	| { ok: true; value: { candidateId: string; network: string } }
+	| { ok: true; value: ExecuteApprovedActionInput & { network: McpSupportedNetwork } }
 	| { ok: false; reasonCodes: string[] } {
 	if (!args || typeof args.candidateId !== "string") {
 		return {
@@ -282,13 +432,102 @@ function parseExecuteApprovedActionInput(
 		};
 	}
 
+	if (!isOnchainActionApprovalProof(args.approvalProof)) {
+		return {
+			ok: false,
+			reasonCodes: ["MISSING_APPROVAL_PROOF"],
+		};
+	}
+
+	if (!isValidExecuteTransactionPayload(args.transactionPayload)) {
+		return {
+			ok: false,
+			reasonCodes: ["MISSING_TRANSACTION_PAYLOAD"],
+		};
+	}
+
+	const network =
+		typeof args.network === "string" && isMcpSupportedNetwork(args.network)
+			? args.network
+			: DEFAULT_NETWORK;
+
 	return {
 		ok: true,
 		value: {
 			candidateId,
-			network: typeof args.network === "string" ? args.network : DEFAULT_NETWORK,
+			network,
+			approvalProof: args.approvalProof,
+			transactionPayload: args.transactionPayload,
 		},
 	};
+}
+
+function isMcpSupportedNetwork(value: string): value is McpSupportedNetwork {
+	return MCP_SUPPORTED_NETWORKS.includes(value as McpSupportedNetwork);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOnchainActionApprovalProof(
+	value: unknown,
+): value is OnchainActionApprovalProof {
+	return isRecord(value) && typeof value.execute_tx_signature === "string";
+}
+
+function validateApprovalProofBinding(
+	input: ExecuteApprovedActionInput & { network: McpSupportedNetwork },
+):
+	| { ok: true }
+	| { ok: false; decision: typeof COMPASS_DECISIONS.DENY | typeof COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT; reasonCodes: string[] } {
+	const proofActionHash = normalizeActionHash(input.approvalProof.action_hash);
+	const payloadActionHash = normalizeActionHash(input.transactionPayload.actionHash);
+
+	if (!proofActionHash || !input.approvalProof.user) {
+		return {
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			reasonCodes: ["INCOMPLETE_APPROVAL_PROOF"],
+		};
+	}
+
+	if (!payloadActionHash) {
+		return {
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			reasonCodes: ["INVALID_TRANSACTION_ACTION_HASH"],
+		};
+	}
+
+	if (proofActionHash !== payloadActionHash) {
+		return {
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			reasonCodes: ["APPROVAL_TRANSACTION_ACTION_HASH_MISMATCH"],
+		};
+	}
+
+	return { ok: true };
+}
+
+function normalizeActionHash(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim().toLowerCase();
+	return /^[0-9a-f]{64}$/.test(normalized) ? normalized : undefined;
+}
+
+function isValidExecuteTransactionPayload(
+	value: unknown,
+): value is ExecuteApprovedActionInput["transactionPayload"] {
+	return (
+		isRecord(value) &&
+		value.encoding === "base64" &&
+		typeof value.actionHash === "string" &&
+		value.actionHash.trim().length > 0 &&
+		typeof value.unsignedVersionedTransaction === "string" &&
+		value.unsignedVersionedTransaction.trim().length > 0
+	);
 }
 
 function networkToRpcUrl(network: string): string {

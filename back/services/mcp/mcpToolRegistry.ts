@@ -130,8 +130,25 @@ const EXECUTE_APPROVED_ACTION_SCHEMA = {
 			description: "Gateway candidate ID from the prior gateway evaluation.",
 		},
 		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
+		approvalProof: {
+			type: "object",
+			description: "On-chain action approval proof verified before execution.",
+		},
+		transactionPayload: {
+			type: "object",
+			properties: {
+				encoding: { type: "string", enum: ["base64"] },
+				actionHash: {
+					type: "string",
+					description: "Approved on-chain action hash this transaction executes.",
+				},
+				unsignedVersionedTransaction: { type: "string" },
+			},
+			required: ["encoding", "actionHash", "unsignedVersionedTransaction"],
+			additionalProperties: false,
+		},
 	},
-	required: ["candidateId"],
+	required: ["candidateId", "approvalProof", "transactionPayload"],
 	additionalProperties: false,
 } as const;
 

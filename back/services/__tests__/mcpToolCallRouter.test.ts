@@ -1,6 +1,13 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import bs58 from "bs58";
+import {
+	Connection,
+	Keypair,
+	TransactionMessage,
+	VersionedTransaction,
+} from "@solana/web3.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
@@ -9,6 +16,19 @@ import { COMPASS_DECISIONS } from "../executionGatewayContracts";
 import { resetMcpAuditEvents } from "../mcp/mcpAuditSink";
 import type { SwapGatewayEvaluation } from "../swapGatewayContracts";
 import type { TransferGatewayEvaluation } from "../transferGatewayContracts";
+
+const APPROVED_ACTION_HASH = "ab".repeat(32);
+const OTHER_ACTION_HASH = "cd".repeat(32);
+const APPROVED_USER = "approved-user";
+
+function createApprovalProof(actionHash = APPROVED_ACTION_HASH) {
+	return {
+		execute_tx_signature: "proof-signature",
+		expected_network: "devnet",
+		action_hash: actionHash,
+		user: APPROVED_USER,
+	};
+}
 
 async function loadMcpToolCallRouter() {
 	try {
@@ -217,11 +237,30 @@ function listTsFiles(path: string): string[] {
 	});
 }
 
+function createUnsignedVersionedTransactionPayload(actionHash = APPROVED_ACTION_HASH) {
+	const payer = Keypair.generate();
+	const message = new TransactionMessage({
+		payerKey: payer.publicKey,
+		recentBlockhash: Keypair.generate().publicKey.toBase58(),
+		instructions: [],
+	}).compileToV0Message();
+	const tx = new VersionedTransaction(message);
+
+	return {
+		encoding: "base64",
+		actionHash,
+		unsignedVersionedTransaction: Buffer.from(tx.serialize()).toString("base64"),
+	};
+}
+
 describe("Wave 4 MCP tool call router", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		defaultApprovalIdempotencyStore.clear();
 		resetMcpAuditEvents();
+		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+		delete process.env.SOLANA_RPC_URL;
 	});
 
 	it("returns ALLOW quote results with audit id", async () => {
@@ -698,8 +737,7 @@ describe("Wave 4 MCP tool call router", () => {
 		expect(result.auditId).toEqual(expect.any(String));
 	});
 
-	it("denies duplicate execute_approved_action candidate IDs before signer lookup", async () => {
-		defaultApprovalIdempotencyStore.consume("candidate-duplicate");
+	it("returns REQUIRE_ADDITIONAL_CONTEXT without consuming idempotency when execute_approved_action is missing approvalProof", async () => {
 		const signerAdapter = await import("../signerAdapter");
 		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
 		const { handleMcpToolCall } = await loadMcpToolCallRouter();
@@ -707,10 +745,149 @@ describe("Wave 4 MCP tool call router", () => {
 
 		const result = await handleMcpToolCall({
 			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
-			arguments: { candidateId: "candidate-duplicate" },
+			arguments: {
+				candidateId: "candidate-missing-proof",
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: "dHgtYnl0ZXM=",
+				},
+			},
 		});
 
 		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-missing-proof")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain("MISSING_APPROVAL_PROOF");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("returns REQUIRE_ADDITIONAL_CONTEXT without consuming idempotency when execute_approved_action is missing transactionPayload", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-missing-payload",
+				approvalProof: createApprovalProof(),
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-missing-payload")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain("MISSING_TRANSACTION_PAYLOAD");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("returns REQUIRE_ADDITIONAL_CONTEXT without signer lookup when approval proof lacks action binding", async () => {
+		const onchainApproval = await import("../onchainApproval");
+		const verifySpy = vi.spyOn(onchainApproval, "verifyActionApproval");
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-incomplete-proof",
+				approvalProof: {
+					execute_tx_signature: "proof-signature",
+					expected_network: "devnet",
+				},
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
+		});
+
+		expect(verifySpy).not.toHaveBeenCalled();
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-incomplete-proof")).toBe(false);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+			reasonCodes: ["INCOMPLETE_APPROVAL_PROOF"],
+		});
+	});
+
+	it("denies execution when approval proof action hash does not match transaction payload", async () => {
+		const onchainApproval = await import("../onchainApproval");
+		const verifySpy = vi.spyOn(onchainApproval, "verifyActionApproval");
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-mismatched-action-hash",
+				approvalProof: createApprovalProof(APPROVED_ACTION_HASH),
+				transactionPayload: createUnsignedVersionedTransactionPayload(OTHER_ACTION_HASH),
+			},
+		});
+
+		expect(verifySpy).not.toHaveBeenCalled();
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-mismatched-action-hash")).toBe(false);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+			reasonCodes: ["APPROVAL_TRANSACTION_ACTION_HASH_MISMATCH"],
+		});
+	});
+
+	it("denies duplicate execute_approved_action candidate IDs before signer lookup", async () => {
+		defaultApprovalIdempotencyStore.consume("candidate-duplicate");
+		const onchainApproval = await import("../onchainApproval");
+		vi.spyOn(onchainApproval, "verifyActionApproval").mockResolvedValueOnce({
+			ok: true,
+		});
+		const signerAdapter = await import("../signerAdapter");
+		const sendSpy = vi.fn();
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter").mockReturnValue({
+			ok: true,
+			adapter: {
+				getAddress: vi.fn(),
+				signTransaction: vi.fn(),
+				signAndSendTransaction: sendSpy,
+			},
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-duplicate",
+				approvalProof: createApprovalProof(),
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
+		});
+
+		expect(signerSpy).toHaveBeenCalledOnce();
+		expect(sendSpy).not.toHaveBeenCalled();
 		expect(result).toMatchObject({
 			ok: false,
 			decision: COMPASS_DECISIONS.DENY,
@@ -731,14 +908,68 @@ describe("Wave 4 MCP tool call router", () => {
 		});
 	});
 
-	it("denies execute_approved_action when local signer is not configured", async () => {
-		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
+	it("denies execute_approved_action when approval proof verification fails before signer lookup or idempotency", async () => {
+		const onchainApproval = await import("../onchainApproval");
+		const verifySpy = vi
+			.spyOn(onchainApproval, "verifyActionApproval")
+			.mockResolvedValueOnce({
+				ok: false,
+				reason: "ONCHAIN_ACTION_APPROVAL_EXPIRED",
+			});
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
 		const { handleMcpToolCall } = await loadMcpToolCallRouter();
 		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
 
 		const result = await handleMcpToolCall({
 			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
-			arguments: { candidateId: "candidate-ready" },
+			arguments: {
+				candidateId: "candidate-expired-proof",
+				approvalProof: createApprovalProof(),
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: "dHgtYnl0ZXM=",
+				},
+			},
+		});
+
+		expect(verifySpy).toHaveBeenCalledWith({
+			execute_tx_signature: "proof-signature",
+			expected_network: "devnet",
+			action_hash: APPROVED_ACTION_HASH,
+			user: APPROVED_USER,
+		});
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-expired-proof")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+			reasonCodes: ["ONCHAIN_ACTION_APPROVAL_EXPIRED"],
+		});
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("denies execute_approved_action when local signer is not configured", async () => {
+		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
+		const onchainApproval = await import("../onchainApproval");
+		vi.spyOn(onchainApproval, "verifyActionApproval").mockResolvedValueOnce({
+			ok: true,
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-ready",
+				approvalProof: createApprovalProof(),
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
 		});
 
 		expect(result).toMatchObject({
@@ -754,6 +985,7 @@ describe("Wave 4 MCP tool call router", () => {
 		});
 		expect(JSON.stringify(result)).not.toContain("rawTransaction");
 		expect(result.auditId).toEqual(expect.any(String));
+		expect(defaultApprovalIdempotencyStore.has("candidate-ready")).toBe(false);
 
 		const { listMcpAuditEvents } = await import("../mcp/mcpAuditSink");
 		expect(listMcpAuditEvents().at(-1)).toMatchObject({
@@ -764,6 +996,54 @@ describe("Wave 4 MCP tool call router", () => {
 				signerPath: "not_reached",
 			},
 		});
+	});
+
+	it("executes approved action once and blocks duplicate retry after execution boundary", async () => {
+		const onchainApproval = await import("../onchainApproval");
+		vi.spyOn(onchainApproval, "verifyActionApproval").mockResolvedValue({
+			ok: true,
+		});
+		const signerAdapter = await import("../signerAdapter");
+		const sendSpy = vi.fn().mockResolvedValue("real-signature");
+		vi.spyOn(signerAdapter, "createSignerAdapter").mockReturnValue({
+			ok: true,
+			adapter: {
+				getAddress: vi.fn(),
+				signTransaction: vi.fn(),
+				signAndSendTransaction: sendSpy,
+			},
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+		const input = {
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-execute-once",
+				approvalProof: createApprovalProof(),
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
+		};
+
+		const first = await handleMcpToolCall(input);
+		const second = await handleMcpToolCall(input);
+
+		expect(first).toMatchObject({
+			ok: true,
+			decision: COMPASS_DECISIONS.ALLOW,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			data: {
+				candidateId: "candidate-execute-once",
+				signerPath: "local_keypair",
+				signature: "real-signature",
+			},
+		});
+		expect(second).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			reasonCodes: ["DUPLICATE_APPROVAL_EXECUTION"],
+		});
+		expect(sendSpy).toHaveBeenCalledTimes(1);
+		expect(sendSpy.mock.calls[0][0]).toBeInstanceOf(VersionedTransaction);
 	});
 
 	it("denies unknown mutating tools fail closed", async () => {
@@ -825,5 +1105,108 @@ describe("Wave 4 MCP tool call router", () => {
 			const source = readFileSync(file, "utf8");
 			expect(source, file).not.toMatch(legacyImportPattern);
 		}
+	});
+
+	it("rejects invalid transaction payload bytes before signer lookup and idempotency consumption", async () => {
+		const onchainApproval = await import("../onchainApproval");
+		vi.spyOn(onchainApproval, "verifyActionApproval").mockResolvedValueOnce({
+			ok: true,
+		});
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-invalid-bytes",
+				approvalProof: createApprovalProof(),
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: Buffer.from("not-a-valid-transaction").toString("base64"),
+				},
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-invalid-bytes")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain("INVALID_TRANSACTION_PAYLOAD");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("executes approved action through real signer factory path with local env config", async () => {
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 = bs58.encode(
+			testKeypair.secretKey,
+		);
+
+		const sendRawTransaction = vi
+			.spyOn(Connection.prototype, "sendRawTransaction")
+			.mockResolvedValue("env-factory-signature" as never);
+
+		const onchainApproval = await import("../onchainApproval");
+		vi.spyOn(onchainApproval, "verifyActionApproval").mockResolvedValue({
+			ok: true,
+		});
+
+		const signerAdapter = await import("../signerAdapter");
+		const createSignerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		// Do NOT mock createSignerAdapter — let the real factory run.
+
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		// Create a transaction whose fee payer matches the env keypair so
+		// VersionedTransaction.sign() succeeds with the real signer adapter.
+		const txMessage = new TransactionMessage({
+			payerKey: testKeypair.publicKey,
+			recentBlockhash: Keypair.generate().publicKey.toBase58(),
+			instructions: [],
+		}).compileToV0Message();
+		const unsignedTx = new VersionedTransaction(txMessage);
+		const transactionPayload = {
+			encoding: "base64" as const,
+			actionHash: APPROVED_ACTION_HASH,
+			unsignedVersionedTransaction: Buffer.from(unsignedTx.serialize()).toString("base64"),
+		};
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-env-factory",
+				approvalProof: createApprovalProof(),
+				transactionPayload,
+			},
+		});
+
+		// The real factory must have been called (not mocked away).
+		expect(createSignerSpy).toHaveBeenCalledOnce();
+		expect(createSignerSpy.mock.results[0]?.value?.ok).toBe(true);
+
+		expect(result).toMatchObject({
+			ok: true,
+			decision: COMPASS_DECISIONS.ALLOW,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			data: {
+				candidateId: "candidate-env-factory",
+				signerPath: "local_keypair",
+				signature: "env-factory-signature",
+			},
+		});
+		expect(sendRawTransaction).toHaveBeenCalledTimes(1);
+		const [submittedBytes] = sendRawTransaction.mock.calls[0];
+		expect(submittedBytes).toBeInstanceOf(Uint8Array);
+		expect(submittedBytes.length).toBeGreaterThan(0);
 	});
 });

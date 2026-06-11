@@ -18,7 +18,7 @@ export interface SignerAdapter {
 }
 
 export type SignerAdapterConfig = {
-	/** Keypair secret key bytes. Only valid when COMPASS_LOCAL_SIGNER_ENABLED=true. */
+	/** Keypair secret key bytes. Falls back to COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var (base58-encoded) when not provided. */
 	localSecretKey?: Uint8Array;
 	/** Defaults to process.env.SOLANA_RPC_URL. Used for network guard. */
 	rpcUrl?: string;
