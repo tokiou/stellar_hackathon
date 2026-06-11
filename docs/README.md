@@ -21,6 +21,7 @@ This folder contains the active product and migration documentation for **Compas
 | Wave 5 gateways           | [`wave-5-swap-gateway/`](wave-5-swap-gateway/), [`wave-5-conditional-gateway/`](wave-5-conditional-gateway/) | Swap and conditional-buy gateway specs.                                             |
 | Wave 6 signer adapter     | [`wave-6-signer-adapter/`](wave-6-signer-adapter/)                   | Signer adapter boundary, local devnet signer, idempotency, and execute tool.        |
 | Wave 7 MCP compatibility  | [`wave-7-mcp-compatibility/`](wave-7-mcp-compatibility/)             | Approved execution hardening first, then upstream/mirrored MCP compatibility.       |
+| Wave 8 demo hardening     | [`wave-8-demo-hardening/`](wave-8-demo-hardening/)                   | Local demo runbook, redacted audit examples, and network readiness boundaries.      |
 | Backend architecture      | [`back-architecture.html`](back-architecture.html)                   | Current post-Wave-3.5 backend modules, flow, spec gaps, tests, and debts.           |
 | On-chain deployments      | [`onchain-deployments.md`](onchain-deployments.md)                   | Devnet program IDs and deployment notes.                                            |
 
