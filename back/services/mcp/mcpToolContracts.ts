@@ -5,6 +5,7 @@ import type {
 } from "../executionGatewayContracts";
 import type { SwapGatewayDecisionMetadata } from "../swapGatewayContracts";
 import type { TransferGatewayDecisionMetadata } from "../transferGatewayContracts";
+import type { OnchainActionApprovalProof } from "../onchainApproval";
 
 export const MCP_TOOL_NAMES = {
 	GET_USDC_SOL_QUOTE: "get_usdc_sol_quote",
@@ -58,6 +59,19 @@ export type CompassMcpToolCallInput = {
 	toolName: string;
 	arguments?: Record<string, unknown>;
 	mutates?: boolean;
+};
+
+export type ExecuteApprovedActionTransactionPayload = {
+	encoding: "base64";
+	actionHash: string;
+	unsignedVersionedTransaction: string;
+};
+
+export type ExecuteApprovedActionInput = {
+	candidateId: string;
+	network?: "devnet" | "testnet" | "mainnet-beta";
+	approvalProof: OnchainActionApprovalProof;
+	transactionPayload: ExecuteApprovedActionTransactionPayload;
 };
 
 export type CompassMcpApproval = {
