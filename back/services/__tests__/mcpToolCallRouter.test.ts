@@ -14,6 +14,7 @@ import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
 import type { ConditionalGatewayEvaluation } from "../conditionalGatewayContracts";
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
 import { resetMcpAuditEvents } from "../mcp/mcpAuditSink";
+import { defaultPendingTransactionStore } from "../pendingTransactionStore";
 import type { SwapGatewayEvaluation } from "../swapGatewayContracts";
 import type { TransferGatewayEvaluation } from "../transferGatewayContracts";
 
@@ -257,9 +258,12 @@ describe("Wave 4 MCP tool call router", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		defaultApprovalIdempotencyStore.clear();
+		defaultPendingTransactionStore.clear();
 		resetMcpAuditEvents();
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY;
+		delete process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY;
 		delete process.env.SOLANA_RPC_URL;
 	});
 
@@ -689,6 +693,53 @@ describe("Wave 4 MCP tool call router", () => {
 		expect(result.auditId).toEqual(expect.any(String));
 	});
 
+	it("defaults transfer actorWallet from local signer and treats omitted recipientKnown as unknown", async () => {
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY = bs58.encode(
+			testKeypair.secretKey,
+		);
+		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = testKeypair.publicKey.toBase58();
+
+		const priceQuote = await import("../priceQuote");
+		vi.spyOn(priceQuote, "getUsdcSolQuote").mockResolvedValueOnce({
+			network: "devnet",
+			provider: "orca_whirlpools_devnet",
+			input_token: "SOL",
+			output_token: "USDC",
+			input_amount: 0.1,
+			output_amount: 14,
+			input_mint: "sol-mint",
+			output_mint: "usdc-mint",
+			slippage_bps: 100,
+			route_context: "unit-test-route",
+			quote_source: "fallback_sol_usd",
+			updated_at: "2026-06-07T00:00:00.000Z",
+		});
+		const transferGateway = await import("../transferGateway");
+		const evaluateSpy = vi
+			.spyOn(transferGateway, "evaluateTransferGateway")
+			.mockResolvedValueOnce(mockTransferEvaluation());
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			arguments: {
+				network: "devnet",
+				amountSol: 0.1,
+				recipientAddress: "unknown-recipient",
+			},
+		});
+
+		expect(evaluateSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actorWallet: testKeypair.publicKey.toBase58(),
+				recipientKnown: false,
+			}),
+		);
+	});
+
 	it("denies direct sign-and-send calls fail closed", async () => {
 		const { handleMcpToolCall } = await loadMcpToolCallRouter();
 		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
@@ -737,7 +788,7 @@ describe("Wave 4 MCP tool call router", () => {
 		expect(result.auditId).toEqual(expect.any(String));
 	});
 
-	it("returns REQUIRE_ADDITIONAL_CONTEXT without consuming idempotency when execute_approved_action is missing approvalProof", async () => {
+	it("denies devnet approval bypass when payload has no pending store entry (arbitrary devnet payload)", async () => {
 		const signerAdapter = await import("../signerAdapter");
 		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
 		const { handleMcpToolCall } = await loadMcpToolCallRouter();
@@ -757,6 +808,84 @@ describe("Wave 4 MCP tool call router", () => {
 
 		expect(signerSpy).not.toHaveBeenCalled();
 		expect(defaultApprovalIdempotencyStore.has("candidate-missing-proof")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain(
+			"DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_IN_STORE",
+		);
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("rejects invalid transaction payload bytes on devnet bypass even with store match", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+
+		// Record a payload in the store with invalid-transaction bytes so the
+		// store match passes but deserialization fails.
+		defaultPendingTransactionStore.record({
+			candidateId: "candidate-devnet-invalid-tx",
+			actionHash: APPROVED_ACTION_HASH,
+			unsignedVersionedTransaction: Buffer.from("not-a-valid-transaction").toString("base64"),
+			network: "devnet",
+			tool: "guarded_transfer_sol",
+			action: "transfer",
+		});
+
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-devnet-invalid-tx",
+				network: "devnet",
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: Buffer.from("not-a-valid-transaction").toString("base64"),
+				},
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-devnet-invalid-tx")).toBe(false);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain("INVALID_TRANSACTION_PAYLOAD");
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("requires approvalProof outside devnet demo execution", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-testnet-missing-proof",
+				network: "testnet",
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: "dHgtYnl0ZXM=",
+				},
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-testnet-missing-proof")).toBe(
 			false,
 		);
 		expect(result).toMatchObject({
@@ -1162,7 +1291,7 @@ describe("Wave 4 MCP tool call router", () => {
 
 		const signerAdapter = await import("../signerAdapter");
 		const createSignerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
-		// Do NOT mock createSignerAdapter — let the real factory run.
+		// Do NOT mock createSignerAdapter - let the real factory run.
 
 		const { handleMcpToolCall } = await loadMcpToolCallRouter();
 		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
@@ -1208,5 +1337,324 @@ describe("Wave 4 MCP tool call router", () => {
 		const [submittedBytes] = sendRawTransaction.mock.calls[0];
 		expect(submittedBytes).toBeInstanceOf(Uint8Array);
 		expect(submittedBytes.length).toBeGreaterThan(0);
+	});
+
+	it("preserves deterministic DENY when LLM is disabled (no COMPASS_LLM_DECISION_ENABLED)", async () => {
+		delete process.env.COMPASS_LLM_DECISION_ENABLED;
+		const transferGateway = await import("../transferGateway");
+		vi.spyOn(transferGateway, "evaluateTransferGateway").mockResolvedValueOnce(
+			mockTransferEvaluation({
+				policyEvaluation: {
+					decision: COMPASS_DECISIONS.DENY,
+					policyId: "default-conservative",
+					reasonCodes: ["TRANSFER_AMOUNT_EXCEEDS_LIMIT"],
+					evaluatedRules: ["transfers.max_usd_without_approval"],
+				},
+			}),
+		);
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			arguments: {
+				network: "devnet",
+				amountSol: 100,
+				recipientAddress: "denied-recipient",
+				recipientKnown: false,
+			},
+		});
+
+		expect(result.decision).toBe(COMPASS_DECISIONS.DENY);
+	});
+
+	it("preserves deterministic DENY even when LLM is enabled (DENY cannot loosen)", async () => {
+		process.env.COMPASS_LLM_DECISION_ENABLED = "true";
+		const transferGateway = await import("../transferGateway");
+		vi.spyOn(transferGateway, "evaluateTransferGateway").mockResolvedValueOnce(
+			mockTransferEvaluation({
+				policyEvaluation: {
+					decision: COMPASS_DECISIONS.DENY,
+					policyId: "default-conservative",
+					reasonCodes: ["TRANSFER_BLOCKED_RECIPIENT"],
+					evaluatedRules: ["transfers.blocked_recipients"],
+				},
+			}),
+		);
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			arguments: {
+				network: "devnet",
+				amountSol: 1,
+				recipientAddress: "blocked-recipient",
+				recipientKnown: false,
+			},
+		});
+
+		// Even with LLM enabled, DENY stays DENY because LLM is not fully configured
+		// (no provider/model/apiKey), so the LLM is not consulted.
+		expect(result.decision).toBe(COMPASS_DECISIONS.DENY);
+	});
+
+	it("keeps current behavior when LLM config is missing", async () => {
+		delete process.env.COMPASS_LLM_DECISION_ENABLED;
+		const transferGateway = await import("../transferGateway");
+		vi.spyOn(transferGateway, "evaluateTransferGateway").mockResolvedValueOnce(
+			mockTransferEvaluation(),
+		);
+		const priceQuote = await import("../priceQuote");
+		vi.spyOn(priceQuote, "getUsdcSolQuote").mockResolvedValueOnce({
+			network: "devnet",
+			provider: "orca_whirlpools_devnet",
+			input_token: "SOL",
+			output_token: "USDC",
+			input_amount: 1,
+			output_amount: 140,
+			input_mint: "sol-mint",
+			output_mint: "usdc-mint",
+			slippage_bps: 100,
+			route_context: "unit-test-route",
+			quote_source: "fallback_sol_usd",
+			updated_at: "2026-06-07T00:00:00.000Z",
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			arguments: {
+				network: "devnet",
+				amountSol: 1,
+				recipientAddress: "unknown-recipient",
+				recipientKnown: false,
+			},
+		});
+
+		expect(result.decision).toBe(COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL);
+	});
+
+	it("audit events include llmConsulted field when LLM is consulted", async () => {
+		process.env.COMPASS_LLM_DECISION_ENABLED = "true";
+		process.env.COMPASS_LLM_PROVIDER = "opencode-go";
+		process.env.COMPASS_LLM_MODEL = "kimi-k2.5";
+		process.env.COMPASS_LLM_BASE_URL = "https://opencode.ai/zen/go/v1/chat/completions";
+		vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+			ok: true,
+			json: vi.fn().mockResolvedValue({
+				output_text: JSON.stringify({
+					decision: "REQUIRE_HUMAN_APPROVAL",
+					confidence: 0.92,
+					reasonCodes: ["LLM_UNKNOWN_RECIPIENT"],
+					rationale: "The recipient is unknown and needs approval.",
+				}),
+			}),
+		} as unknown as Response);
+		const transferGateway = await import("../transferGateway");
+		vi.spyOn(transferGateway, "evaluateTransferGateway").mockResolvedValueOnce(
+			mockTransferEvaluation(),
+		);
+		const priceQuote = await import("../priceQuote");
+		vi.spyOn(priceQuote, "getUsdcSolQuote").mockResolvedValueOnce({
+			network: "devnet",
+			provider: "orca_whirlpools_devnet",
+			input_token: "SOL",
+			output_token: "USDC",
+			input_amount: 1,
+			output_amount: 140,
+			input_mint: "sol-mint",
+			output_mint: "usdc-mint",
+			slippage_bps: 100,
+			route_context: "unit-test-route",
+			quote_source: "fallback_sol_usd",
+			updated_at: "2026-06-07T00:00:00.000Z",
+		});
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
+			arguments: {
+				network: "devnet",
+				amountSol: 1,
+				recipientAddress: "unknown-recipient",
+				recipientKnown: false,
+			},
+		});
+
+		const { listMcpAuditEvents } = await import("../mcp/mcpAuditSink");
+		const events = listMcpAuditEvents();
+		expect(events.some((event) => event.metadata.llmConsulted === true)).toBe(true);
+		expect(events.at(-1)?.metadata).toMatchObject({
+			llmConsulted: true,
+			llmDecision: COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+			llmClamped: false,
+		});
+	});
+
+	it("denies devnet approval bypass when payload is not in pending store (arbitrary devnet payload)", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-arbitrary-payload",
+				network: "devnet",
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-arbitrary-payload")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain(
+			"DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_IN_STORE",
+		);
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("allows devnet approval bypass when payload matches pending store from guarded_transfer_sol", async () => {
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 = bs58.encode(
+			testKeypair.secretKey,
+		);
+		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = testKeypair.publicKey.toBase58();
+
+		const sendRawTransaction = vi
+			.spyOn(Connection.prototype, "sendRawTransaction")
+			.mockResolvedValue("devnet-bypass-signature" as never);
+
+		// Build a valid unsigned transaction whose fee payer matches the env keypair.
+		const txMessage = new TransactionMessage({
+			payerKey: testKeypair.publicKey,
+			recentBlockhash: Keypair.generate().publicKey.toBase58(),
+			instructions: [],
+		}).compileToV0Message();
+		const unsignedTx = new VersionedTransaction(txMessage);
+		const unsignedB64 = Buffer.from(unsignedTx.serialize()).toString("base64");
+
+		// Record the payload in the pending store — simulating what
+		// guarded_transfer_sol would do when building a transactionPayload.
+		const candidateId = "candidate-devnet-bypass-e2e";
+		defaultPendingTransactionStore.record({
+			candidateId,
+			actionHash: APPROVED_ACTION_HASH,
+			unsignedVersionedTransaction: unsignedB64,
+			network: "devnet",
+			tool: "guarded_transfer_sol",
+			action: "transfer",
+		});
+
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId,
+				network: "devnet",
+				transactionPayload: {
+					encoding: "base64",
+					actionHash: APPROVED_ACTION_HASH,
+					unsignedVersionedTransaction: unsignedB64,
+				},
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			decision: COMPASS_DECISIONS.ALLOW,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			data: {
+				candidateId,
+				signerPath: "local_keypair",
+				signature: "devnet-bypass-signature",
+			},
+		});
+		expect(sendRawTransaction).toHaveBeenCalledTimes(1);
+	});
+
+	it("denies devnet approval bypass when stored payload does not match caller payload", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		// Pre-register a payload in the store with one transaction.
+		const legitimatePayload = createUnsignedVersionedTransactionPayload();
+		defaultPendingTransactionStore.record({
+			candidateId: "candidate-mismatched-payload",
+			actionHash: legitimatePayload.actionHash,
+			unsignedVersionedTransaction: legitimatePayload.unsignedVersionedTransaction,
+			network: "devnet",
+			tool: "guarded_transfer_sol",
+			action: "transfer",
+		});
+
+		// Now call execute_approved_action with a DIFFERENT transaction payload
+		// but the same candidateId — this should be denied.
+		const differentPayload = createUnsignedVersionedTransactionPayload(
+			APPROVED_ACTION_HASH,
+		);
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-mismatched-payload",
+				network: "devnet",
+				transactionPayload: differentPayload,
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-mismatched-payload")).toBe(
+			false,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			decision: COMPASS_DECISIONS.DENY,
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			riskClass: "SIGNING",
+		});
+		expect(result.reasonCodes).toContain(
+			"DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_COMPASS_BUILT",
+		);
+		expect(result.auditId).toEqual(expect.any(String));
+	});
+
+	it("does not consume idempotency on devnet bypass payload denial", async () => {
+		const signerAdapter = await import("../signerAdapter");
+		const signerSpy = vi.spyOn(signerAdapter, "createSignerAdapter");
+		const { handleMcpToolCall } = await loadMcpToolCallRouter();
+		const { MCP_TOOL_NAMES } = await loadMcpToolContracts();
+
+		const result = await handleMcpToolCall({
+			toolName: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
+			arguments: {
+				candidateId: "candidate-no-store-entry",
+				network: "devnet",
+				transactionPayload: createUnsignedVersionedTransactionPayload(),
+			},
+		});
+
+		expect(signerSpy).not.toHaveBeenCalled();
+		expect(defaultApprovalIdempotencyStore.has("candidate-no-store-entry")).toBe(
+			false,
+		);
+		expect(result.reasonCodes).toContain(
+			"DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_IN_STORE",
+		);
 	});
 });

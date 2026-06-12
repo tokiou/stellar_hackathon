@@ -46,6 +46,8 @@ describe("createSignerAdapter", () => {
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 		delete process.env.SOLANA_RPC_URL;
 		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY;
+		delete process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY;
 	});
 
 	it("returns LOCAL_SIGNER_NOT_CONFIGURED when COMPASS_LOCAL_SIGNER_ENABLED is absent", async () => {
@@ -145,6 +147,8 @@ describe("LocalKeypairAdapter", () => {
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 		delete process.env.SOLANA_RPC_URL;
 		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY;
+		delete process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY;
 	});
 
 	it("getAddress returns the correct base58 address for a test keypair", async () => {
@@ -254,6 +258,59 @@ describe("LocalKeypairAdapter", () => {
 		expect(typeof result.adapter.signTransaction).toBe("function");
 		const address = await result.adapter.getAddress();
 		expect(address).toBe(testKeypair.publicKey.toBase58());
+	});
+
+	it("returns ok with adapter when COMPASS_LOCAL_SIGNER_SECRET_KEY env var provides base58 secret key", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY = bs58.encode(
+			testKeypair.secretKey,
+		);
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter();
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected ok");
+		const address = await result.adapter.getAddress();
+		expect(address).toBe(testKeypair.publicKey.toBase58());
+	});
+
+	it("returns ok when configured public key matches derived signer address", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		const testKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY = bs58.encode(
+			testKeypair.secretKey,
+		);
+		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = testKeypair.publicKey.toBase58();
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter();
+
+		expect(result.ok).toBe(true);
+	});
+
+	it("returns LOCAL_SIGNER_PUBLIC_KEY_MISMATCH when configured public key differs from derived signer address", async () => {
+		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
+		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
+		const testKeypair = Keypair.generate();
+		const otherKeypair = Keypair.generate();
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY = bs58.encode(
+			testKeypair.secretKey,
+		);
+		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = otherKeypair.publicKey.toBase58();
+
+		const { createSignerAdapter } = await import("../signerAdapter");
+
+		const result = createSignerAdapter();
+
+		expect(result.ok).toBe(false);
+		if (result.ok !== false) throw new Error("expected failure");
+		expect(result.reason).toBe("LOCAL_SIGNER_PUBLIC_KEY_MISMATCH");
 	});
 
 	it("returns LOCAL_SIGNER_NOT_CONFIGURED when both localSecretKey config and COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var are absent", async () => {

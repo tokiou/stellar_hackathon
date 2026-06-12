@@ -28,5 +28,8 @@ export type CreateSignerAdapterResult =
 	| { ok: true; adapter: SignerAdapter }
 	| {
 			ok: false;
-			reason: "LOCAL_SIGNER_NOT_CONFIGURED" | "LOCAL_SIGNER_MAINNET_FORBIDDEN";
+			reason:
+				| "LOCAL_SIGNER_NOT_CONFIGURED"
+				| "LOCAL_SIGNER_MAINNET_FORBIDDEN"
+				| "LOCAL_SIGNER_PUBLIC_KEY_MISMATCH";
 	  };

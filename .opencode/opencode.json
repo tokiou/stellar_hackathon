@@ -3,5 +3,18 @@
   "instructions": [
     ".opencode/AGENTS.md",
     "AGENTS.md"
-  ]
+  ],
+  "mcp": {
+    "compass": {
+      "type": "local",
+      "command": [
+        "npm",
+        "run",
+        "--silent",
+        "mcp:dev"
+      ],
+      "enabled": true,
+      "env": {}
+    }
+  }
 }

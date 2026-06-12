@@ -46,10 +46,18 @@ const GUARDED_TRANSFER_SOL_SCHEMA = {
 	type: "object",
 	properties: {
 		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
-		actorWallet: { type: "string" },
+		actorWallet: {
+			type: "string",
+			description:
+				"Optional source wallet. In local-signer demo mode Compass uses the configured signer wallet when omitted.",
+		},
 		amountSol: { type: "number", exclusiveMinimum: 0 },
 		recipientAddress: { type: "string" },
-		recipientKnown: { type: "boolean" },
+		recipientKnown: {
+			type: "boolean",
+			description:
+				"Whether the recipient is known/trusted. If unsure, omit it and Compass treats the recipient as unknown.",
+		},
 		walletSafety: { type: "object" },
 	},
 	required: ["amountSol", "recipientAddress"],
@@ -132,7 +140,8 @@ const EXECUTE_APPROVED_ACTION_SCHEMA = {
 		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
 		approvalProof: {
 			type: "object",
-			description: "On-chain action approval proof verified before execution.",
+			description:
+				"On-chain action approval proof verified before execution. Optional only for local devnet demo execution.",
 		},
 		transactionPayload: {
 			type: "object",
@@ -148,7 +157,7 @@ const EXECUTE_APPROVED_ACTION_SCHEMA = {
 			additionalProperties: false,
 		},
 	},
-	required: ["candidateId", "approvalProof", "transactionPayload"],
+	required: ["candidateId", "transactionPayload"],
 	additionalProperties: false,
 } as const;
 
@@ -199,7 +208,7 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 	{
 		name: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
 		description:
-			"Prepare a guarded SOL transfer through Compass policy, transfer guard, and audit.",
+			"Prepare a guarded SOL transfer through Compass policy, transfer guard, and audit. Do not ask the user for source wallet in local-signer demo mode; Compass uses the configured signer wallet.",
 		inputSchema: GUARDED_TRANSFER_SOL_SCHEMA,
 		metadata: {
 			riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION,
@@ -241,7 +250,7 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 	{
 		name: MCP_TOOL_NAMES.EXECUTE_APPROVED_ACTION,
 		description:
-			"Execute a Compass-approved action after a gateway candidate ID has passed Compass guardrails.",
+			"Execute a Compass-approved action after a gateway candidate ID has passed Compass guardrails. In devnet local-signer demo mode, approvalProof may be omitted; mainnet/testnet still require proof.",
 		inputSchema: EXECUTE_APPROVED_ACTION_SCHEMA,
 		metadata: {
 			riskClass: TOOL_RISK_CLASSES.SIGNING,

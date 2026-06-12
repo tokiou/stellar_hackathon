@@ -14,7 +14,8 @@
     "test:legacy": "vitest --config vitest.legacy.config.ts --run",
     "test:watch": "vitest --config vitest.back.config.ts",
     "bootstrap:conditional:legacy": "node legacy/scripts/bootstrap-conditional-devnet.mjs",
-    "mcp:dev": "tsx back/services/mcp/mcpServer.ts"
+    "mcp:dev": "tsx back/services/mcp/mcpServer.ts",
+    "mcp:install:opencode": "node scripts/install-opencode-mcp.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",

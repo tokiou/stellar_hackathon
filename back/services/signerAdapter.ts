@@ -36,15 +36,29 @@ export class LocalKeypairAdapter implements SignerAdapter {
 	}
 }
 
-// Resolve secret key from COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 env var (base58-encoded).
+// Resolve secret key from base58 env vars.
 // Returns undefined if the env var is absent or cannot be decoded.
 function resolveSecretKeyFromEnv(): Uint8Array | undefined {
-	const envKey = process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
+	const envKey =
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58 ??
+		process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY;
 	if (!envKey) return undefined;
 	try {
 		return new Uint8Array(bs58.decode(envKey));
 	} catch {
 		return undefined;
+	}
+}
+
+function matchesConfiguredPublicKey(secretKey: Uint8Array): boolean {
+	const expectedPublicKey = process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY?.trim();
+	if (!expectedPublicKey) return true;
+
+	try {
+		const derivedPublicKey = Keypair.fromSecretKey(secretKey).publicKey.toBase58();
+		return derivedPublicKey === expectedPublicKey;
+	} catch {
+		return false;
 	}
 }
 
@@ -67,6 +81,10 @@ export function createSignerAdapter(
 
 	if (!secretKey) {
 		return { ok: false, reason: "LOCAL_SIGNER_NOT_CONFIGURED" };
+	}
+
+	if (!matchesConfiguredPublicKey(secretKey)) {
+		return { ok: false, reason: "LOCAL_SIGNER_PUBLIC_KEY_MISMATCH" };
 	}
 
 	if (!rpcUrl) {

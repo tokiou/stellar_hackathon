@@ -83,9 +83,12 @@ describe("Wave 4 MCP tool registry", () => {
 				readOnly: false,
 			},
 			inputSchema: {
-				required: ["candidateId", "approvalProof", "transactionPayload"],
+				required: ["candidateId", "transactionPayload"],
 				additionalProperties: false,
 				properties: {
+					approvalProof: {
+						description: expect.stringContaining("Optional only for local devnet demo"),
+					},
 					transactionPayload: {
 						required: ["encoding", "actionHash", "unsignedVersionedTransaction"],
 					},
