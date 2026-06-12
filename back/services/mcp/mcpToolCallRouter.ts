@@ -2,12 +2,22 @@ import * as conditionalGateway from "../conditionalGateway";
 import type { EvaluateConditionalGatewayInput } from "../conditionalGatewayContracts";
 import { VersionedTransaction } from "@solana/web3.js";
 import { defaultApprovalIdempotencyStore } from "../approvalIdempotencyStore";
+import { defaultPendingTransactionStore } from "../pendingTransactionStore";
 import {
 	buildAuditEvent,
 	classifyToolCall,
 	createActionCandidate,
 } from "../executionGateway";
 import { COMPASS_DECISIONS } from "../executionGatewayContracts";
+import {
+	type LlmJudgeConfig,
+	type LlmClampedDecision,
+} from "../llmDecisionContracts";
+import {
+	evaluateLlmMetadata,
+	resolveLlmConfig,
+} from "../llmDecisionAdapter";
+import { sanitizeLlmJudgeInput } from "../llmDecisionSanitizer";
 import * as onchainApproval from "../onchainApproval";
 import type { OnchainActionApprovalProof } from "../onchainApproval";
 import * as priceQuote from "../priceQuote";
@@ -17,6 +27,7 @@ import * as swapGateway from "../swapGateway";
 import type { EvaluateSwapGatewayInput } from "../swapGatewayContracts";
 import * as transferGateway from "../transferGateway";
 import type { EvaluateTransferGatewayInput } from "../transferGatewayContracts";
+import { buildSolTransferTransactionPayload } from "../transferTransactionPayload";
 import { recordMcpAuditEvent } from "./mcpAuditSink";
 import {
 	MCP_TOOL_NAMES,
@@ -36,6 +47,103 @@ import {
 const DEFAULT_NETWORK = "devnet";
 const MCP_AUDIT_ACTION_KIND_PREFIX = "mcp_tool_call";
 const MCP_SUPPORTED_NETWORKS = ["devnet", "testnet", "mainnet-beta"] as const;
+
+/**
+ * Optional LLM metadata enrichment after deterministic evaluation.
+ *
+ * If LLM config is missing/disabled, returns the deterministic result unchanged.
+ * If enabled, calls the LLM judge and clamps the result so deterministic DENY
+ * cannot be loosened. Audit metadata is always attached when LLM is consulted.
+ */
+async function enrichWithLlmMetadata(
+	deterministicDecision: typeof COMPASS_DECISIONS[keyof typeof COMPASS_DECISIONS],
+	riskClass: string,
+	classification: ReturnType<typeof classifyToolCall>,
+	registryEntry: CompassMcpToolRegistryEntry | undefined,
+	network: string | undefined,
+	reasonCodes: string[],
+	policyId?: string,
+	evaluatedRules?: string[],
+): Promise<{ llmMetadata: LlmClampedDecision | undefined }> {
+	const config: LlmJudgeConfig = resolveLlmConfig();
+
+	if (!config.enabled) {
+		return { llmMetadata: undefined };
+	}
+
+	const sanitizedInput = sanitizeLlmJudgeInputFromContext(
+		deterministicDecision,
+		riskClass,
+		classification,
+		registryEntry,
+		network,
+		reasonCodes,
+		policyId,
+		evaluatedRules,
+	);
+
+	const llmResult = await evaluateLlmMetadata({
+		input: sanitizedInput,
+		config,
+	});
+
+	if (llmResult.llmConsulted && llmResult.llmOutput) {
+		const auditId = recordMcpAuditEvent(
+			buildAuditEvent({
+				candidate: createActionCandidate({
+					chain: "solana",
+					network: network ?? DEFAULT_NETWORK,
+					toolName: registryEntry?.classificationToolName ?? "unknown",
+					actionKind: `${MCP_AUDIT_ACTION_KIND_PREFIX}.${registryEntry?.actionKind ?? "unknown"}`,
+					params: {
+						llmDecision: llmResult.decision,
+						llmClamped: llmResult.clamped,
+						llmConfidence: llmResult.llmOutput.confidence,
+						llmReasonCodes: llmResult.llmOutput.reasonCodes,
+					},
+				}),
+				classification: {
+					...classification,
+					toolName: registryEntry?.classificationToolName ?? "unknown",
+				},
+				decision: deterministicDecision,
+				result: "success",
+				metadata: {
+					llmConsulted: true,
+					llmDecision: llmResult.decision,
+					llmClamped: llmResult.clamped,
+					llmRationale: llmResult.llmRationale,
+				},
+			}),
+		);
+
+		void auditId; // audit recorded for traceability
+	}
+
+	return { llmMetadata: llmResult.llmConsulted ? llmResult : undefined };
+}
+
+function sanitizeLlmJudgeInputFromContext(
+	deterministicDecision: typeof COMPASS_DECISIONS[keyof typeof COMPASS_DECISIONS],
+	riskClass: string,
+	classification: ReturnType<typeof classifyToolCall>,
+	registryEntry: CompassMcpToolRegistryEntry | undefined,
+	network: string | undefined,
+	reasonCodes: string[],
+	policyId?: string,
+	evaluatedRules?: string[],
+) {
+	return sanitizeLlmJudgeInput({
+		toolName: registryEntry?.classificationToolName ?? "unknown",
+		actionKind: registryEntry?.actionKind ?? "unknown",
+		network: network ?? DEFAULT_NETWORK,
+		deterministicDecision,
+		riskClass,
+		reasonCodes,
+		policyId,
+		evaluatedRules,
+	});
+}
 
 type McpSupportedNetwork = (typeof MCP_SUPPORTED_NETWORKS)[number];
 
@@ -218,10 +326,12 @@ async function handleExecuteApprovedActionTool(
 		});
 	}
 
-	const approval = await onchainApproval.verifyActionApproval(
-		parsed.value.approvalProof,
-	);
-	if (!approval.ok) {
+	let devnetApprovalBypassed = false;
+	if (parsed.value.approvalProof) {
+		const approval = await onchainApproval.verifyActionApproval(
+			parsed.value.approvalProof,
+		);
+		if (!approval.ok) {
 		const auditId = emitMcpAudit({
 			publicToolName: registryEntry.name,
 			actionKind: registryEntry.actionKind,
@@ -234,6 +344,7 @@ async function handleExecuteApprovedActionTool(
 				candidateId: parsed.value.candidateId,
 				duplicateBlocked: false,
 				approvalVerified: false,
+				devnetApprovalBypassed: false,
 				signerPath: "not_reached",
 			},
 		});
@@ -249,6 +360,46 @@ async function handleExecuteApprovedActionTool(
 			},
 			auditId,
 		});
+		}
+	} else {
+		// Devnet approval bypass: must match a transaction payload that Compass
+		// itself built in a prior guarded_transfer_sol / guarded_swap_sol_usdc /
+		// create_conditional_buy_sol call. Arbitrary caller-provided payloads are
+		// denied to prevent signing unvetted transactions.
+		const devnetPayloadGuard = validateDevnetBypassPayload(parsed.value);
+		if (devnetPayloadGuard.ok === false) {
+			const { reason: devnetDenyReason } = devnetPayloadGuard;
+			const auditId = emitMcpAudit({
+				publicToolName: registryEntry.name,
+				actionKind: registryEntry.actionKind,
+				classification,
+				decision: COMPASS_DECISIONS.DENY,
+				result: "denied",
+				network: parsed.value.network,
+				metadata: {
+					registeredTool: true,
+					candidateId: parsed.value.candidateId,
+					duplicateBlocked: false,
+					approvalVerified: false,
+					devnetApprovalBypassed: false,
+					devnetPayloadGuardReason: devnetDenyReason,
+					signerPath: "not_reached",
+				},
+			});
+
+			return buildDenyResult({
+				toolName: registryEntry.name,
+				riskClass: registryEntry.metadata.riskClass,
+				reasonCodes: [devnetDenyReason],
+				message: "Compass blocked devnet execution because the transaction payload was not built by Compass. Only payloads from guarded_transfer_sol (or equivalent Compass-guarded calls) may execute without on-chain approval proof.",
+				data: {
+					candidateId: parsed.value.candidateId,
+					signerPath: "not_reached",
+				},
+				auditId,
+			});
+		}
+		devnetApprovalBypassed = true;
 	}
 	let unsignedTx: VersionedTransaction;
 	try {
@@ -271,6 +422,7 @@ async function handleExecuteApprovedActionTool(
 				candidateId: parsed.value.candidateId,
 				duplicateBlocked: false,
 				approvalVerified: true,
+				devnetApprovalBypassed,
 				signerPath: "not_reached",
 				validationErrors: ["INVALID_TRANSACTION_PAYLOAD"],
 			},
@@ -299,6 +451,7 @@ async function handleExecuteApprovedActionTool(
 				candidateId: parsed.value.candidateId,
 				duplicateBlocked: false,
 				approvalVerified: true,
+				devnetApprovalBypassed,
 				signerPath: "not_reached",
 			},
 		});
@@ -329,6 +482,7 @@ async function handleExecuteApprovedActionTool(
 				candidateId: parsed.value.candidateId,
 				duplicateBlocked: false,
 				approvalVerified: true,
+				devnetApprovalBypassed,
 				signerPath: "not_reached",
 			},
 		});
@@ -392,6 +546,7 @@ async function handleExecuteApprovedActionTool(
 			candidateId: parsed.value.candidateId,
 			duplicateBlocked: false,
 			approvalVerified: true,
+			devnetApprovalBypassed,
 			signerPath: "local_keypair",
 			transactionSubmitted: true,
 			signature,
@@ -432,7 +587,12 @@ function parseExecuteApprovedActionInput(
 		};
 	}
 
-	if (!isOnchainActionApprovalProof(args.approvalProof)) {
+	const network =
+		typeof args.network === "string" && isMcpSupportedNetwork(args.network)
+			? args.network
+			: DEFAULT_NETWORK;
+
+	if (!isOnchainActionApprovalProof(args.approvalProof) && network !== "devnet") {
 		return {
 			ok: false,
 			reasonCodes: ["MISSING_APPROVAL_PROOF"],
@@ -446,17 +606,14 @@ function parseExecuteApprovedActionInput(
 		};
 	}
 
-	const network =
-		typeof args.network === "string" && isMcpSupportedNetwork(args.network)
-			? args.network
-			: DEFAULT_NETWORK;
-
 	return {
 		ok: true,
 		value: {
 			candidateId,
 			network,
-			approvalProof: args.approvalProof,
+			approvalProof: isOnchainActionApprovalProof(args.approvalProof)
+				? args.approvalProof
+				: undefined,
 			transactionPayload: args.transactionPayload,
 		},
 	};
@@ -464,6 +621,24 @@ function parseExecuteApprovedActionInput(
 
 function isMcpSupportedNetwork(value: string): value is McpSupportedNetwork {
 	return MCP_SUPPORTED_NETWORKS.includes(value as McpSupportedNetwork);
+}
+
+async function applyDefaultActorWallet<T extends { actorWallet?: string; network: string }>(
+	input: T,
+): Promise<T> {
+	if (input.actorWallet) {
+		return input;
+	}
+
+	const signer = createSignerAdapter({ rpcUrl: networkToRpcUrl(input.network) });
+	if (!signer.ok) {
+		return input;
+	}
+
+	return {
+		...input,
+		actorWallet: await signer.adapter.getAddress(),
+	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -481,10 +656,14 @@ function validateApprovalProofBinding(
 ):
 	| { ok: true }
 	| { ok: false; decision: typeof COMPASS_DECISIONS.DENY | typeof COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT; reasonCodes: string[] } {
-	const proofActionHash = normalizeActionHash(input.approvalProof.action_hash);
+	if (!input.approvalProof && input.network === "devnet") {
+		return { ok: true };
+	}
+
+	const proofActionHash = normalizeActionHash(input.approvalProof?.action_hash);
 	const payloadActionHash = normalizeActionHash(input.transactionPayload.actionHash);
 
-	if (!proofActionHash || !input.approvalProof.user) {
+	if (!proofActionHash || !input.approvalProof?.user) {
 		return {
 			ok: false,
 			decision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
@@ -528,6 +707,58 @@ function isValidExecuteTransactionPayload(
 		typeof value.unsignedVersionedTransaction === "string" &&
 		value.unsignedVersionedTransaction.trim().length > 0
 	);
+}
+
+/**
+ * Validate that a devnet approval-bypass payload matches a transaction
+ * built by Compass in a prior guarded call. Without this check, any MCP
+ * client could supply an arbitrary unsigned transaction for Compass to sign.
+ */
+function validateDevnetBypassPayload(
+	input: ExecuteApprovedActionInput & { network: McpSupportedNetwork },
+): { ok: true } | { ok: false; reason: string } {
+	if (input.network !== "devnet") {
+		return {
+			ok: false,
+			reason: "DEVNET_APPROVAL_BYPASS_NETWORK_NOT_DEVNET",
+		};
+	}
+
+	const payloadActionHash = normalizeActionHash(input.transactionPayload.actionHash);
+
+	// Try candidateId lookup first (primary key), then actionHash (secondary).
+	const stored = payloadActionHash
+		? defaultPendingTransactionStore.consumeByCandidateId(input.candidateId) ??
+			defaultPendingTransactionStore.consumeByActionHash(payloadActionHash)
+		: defaultPendingTransactionStore.consumeByCandidateId(input.candidateId);
+
+	if (!stored) {
+		return {
+			ok: false,
+			reason: "DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_IN_STORE",
+		};
+	}
+
+	// Network must match.
+	if (stored.network !== input.network) {
+		return {
+			ok: false,
+			reason: "DEVNET_APPROVAL_BYPASS_NETWORK_MISMATCH",
+		};
+	}
+
+	// The unsigned transaction bytes must match exactly.
+	if (
+		stored.unsignedVersionedTransaction !==
+		input.transactionPayload.unsignedVersionedTransaction
+	) {
+		return {
+			ok: false,
+			reason: "DEVNET_APPROVAL_BYPASS_PAYLOAD_NOT_COMPASS_BUILT",
+		};
+	}
+
+	return { ok: true };
 }
 
 function networkToRpcUrl(network: string): string {
@@ -728,19 +959,36 @@ async function handleTransferTool(
 		});
 	}
 
+	const transferInput = await applyDefaultActorWallet(parsed.value);
 	const evaluation = await transferGateway.evaluateTransferGateway({
-		...parsed.value,
+		...transferInput,
 		toolName: registryEntry.classificationToolName,
 	});
-	const decision = evaluation.policyEvaluation.decision;
+	const deterministicDecision = evaluation.policyEvaluation.decision;
 	const reasonCodes = evaluation.policyEvaluation.reasonCodes;
+
+	// Optional LLM metadata enrichment - never loosens deterministic decisions.
+	const { llmMetadata } = await enrichWithLlmMetadata(
+		deterministicDecision,
+		evaluation.classification.riskClass,
+		evaluation.classification,
+		registryEntry,
+		transferInput.network,
+		reasonCodes,
+		evaluation.policyEvaluation.policyId,
+		evaluation.policyEvaluation.evaluatedRules,
+	);
+	const decision = llmMetadata?.clamped
+		? llmMetadata.decision
+		: deterministicDecision;
+
 	const auditId = emitMcpAudit({
 		publicToolName: registryEntry.name,
 		actionKind: registryEntry.actionKind,
 		classification: evaluation.classification,
 		decision,
 		result: decision === COMPASS_DECISIONS.DENY ? "denied" : "pending",
-		network: parsed.value.network,
+			network: transferInput.network,
 		metadata: {
 			registeredTool: true,
 			policyId: evaluation.policyEvaluation.policyId,
@@ -752,12 +1000,26 @@ async function handleTransferTool(
 			gatewayCandidateId: evaluation.metadata.candidateId,
 			candidateFingerprint: evaluation.metadata.candidateFingerprint,
 			contextFingerprint: evaluation.metadata.contextFingerprint,
+			...(llmMetadata?.llmConsulted
+				? {
+						llmConsulted: true,
+						llmDecision: llmMetadata.decision,
+						llmClamped: llmMetadata.clamped,
+					}
+				: {}),
 		},
 		params: {
-			amountSol: parsed.value.amountSol,
-			recipientAddress: parsed.value.recipientAddress,
-			recipientKnown: parsed.value.recipientKnown,
+			amountSol: transferInput.amountSol,
+			recipientAddress: transferInput.recipientAddress,
+			recipientKnown: transferInput.recipientKnown,
 		},
+	});
+	const transferResultData = await buildTransferResultData({
+		evaluation,
+		input: transferInput,
+		includeExecutionPayload:
+			decision === COMPASS_DECISIONS.ALLOW ||
+			decision === COMPASS_DECISIONS.REQUIRE_HUMAN_APPROVAL,
 	});
 
 	if (decision === COMPASS_DECISIONS.ALLOW) {
@@ -765,7 +1027,7 @@ async function handleTransferTool(
 			toolName: registryEntry.name,
 			riskClass: registryEntry.metadata.riskClass,
 			reasonCodes,
-			data: buildTransferResultData(evaluation),
+			data: transferResultData,
 			approval: {
 				required: evaluation.requiresApprovalCard,
 				metadata: evaluation.requiresApprovalCard
@@ -781,7 +1043,7 @@ async function handleTransferTool(
 			toolName: registryEntry.name,
 			riskClass: registryEntry.metadata.riskClass,
 			reasonCodes,
-			data: buildTransferResultData(evaluation),
+			data: transferResultData,
 			approval: {
 				required: true,
 				metadata: evaluation.metadata,
@@ -795,7 +1057,7 @@ async function handleTransferTool(
 			toolName: registryEntry.name,
 			riskClass: registryEntry.metadata.riskClass,
 			reasonCodes,
-			data: buildTransferResultData(evaluation),
+			data: transferResultData,
 			auditId,
 		});
 	}
@@ -804,7 +1066,7 @@ async function handleTransferTool(
 		toolName: registryEntry.name,
 		riskClass: registryEntry.metadata.riskClass,
 		reasonCodes,
-		data: buildTransferResultData(evaluation),
+		data: transferResultData,
 		auditId,
 	});
 }
@@ -842,19 +1104,36 @@ async function handleSwapTool(
 		});
 	}
 
+	const swapInput = await applyDefaultActorWallet(parsed.value);
 	const evaluation = await swapGateway.evaluateSwapGateway({
-		...parsed.value,
+		...swapInput,
 		toolName: registryEntry.classificationToolName,
 	});
-	const decision = evaluation.policyEvaluation.decision;
+	const deterministicDecision = evaluation.policyEvaluation.decision;
 	const reasonCodes = evaluation.policyEvaluation.reasonCodes;
+
+	// Optional LLM metadata enrichment - never loosens deterministic decisions.
+	const { llmMetadata } = await enrichWithLlmMetadata(
+		deterministicDecision,
+		evaluation.classification.riskClass,
+		evaluation.classification,
+		registryEntry,
+		swapInput.network,
+		reasonCodes,
+		evaluation.policyEvaluation.policyId,
+		evaluation.policyEvaluation.evaluatedRules,
+	);
+	const decision = llmMetadata?.clamped
+		? llmMetadata.decision
+		: deterministicDecision;
+
 	const auditId = emitMcpAudit({
 		publicToolName: registryEntry.name,
 		actionKind: registryEntry.actionKind,
 		classification: evaluation.classification,
 		decision,
 		result: decision === COMPASS_DECISIONS.DENY ? "denied" : "pending",
-		network: parsed.value.network,
+			network: swapInput.network,
 		metadata: {
 			registeredTool: true,
 			policyId: evaluation.policyEvaluation.policyId,
@@ -869,6 +1148,13 @@ async function handleSwapTool(
 			protocol: parsed.value.protocol,
 			slippageBps: parsed.value.slippageBps,
 			tokenKnown: parsed.value.tokenKnown,
+			...(llmMetadata?.llmConsulted
+				? {
+						llmConsulted: true,
+						llmDecision: llmMetadata.decision,
+						llmClamped: llmMetadata.clamped,
+					}
+				: {}),
 		},
 		params: {
 			inputToken: parsed.value.inputToken,
@@ -959,19 +1245,36 @@ async function handleConditionalTool(
 		});
 	}
 
+	const conditionalInput = await applyDefaultActorWallet(parsed.value);
 	const evaluation = await conditionalGateway.evaluateConditionalGateway({
-		...parsed.value,
+		...conditionalInput,
 		toolName: registryEntry.classificationToolName,
 	});
-	const decision = evaluation.policyEvaluation.decision;
+	const deterministicDecision = evaluation.policyEvaluation.decision;
 	const reasonCodes = evaluation.policyEvaluation.reasonCodes;
+
+	// Optional LLM metadata enrichment - never loosens deterministic decisions.
+	const { llmMetadata } = await enrichWithLlmMetadata(
+		deterministicDecision,
+		evaluation.classification.riskClass,
+		evaluation.classification,
+		registryEntry,
+		conditionalInput.network,
+		reasonCodes,
+		evaluation.policyEvaluation.policyId,
+		evaluation.policyEvaluation.evaluatedRules,
+	);
+	const decision = llmMetadata?.clamped
+		? llmMetadata.decision
+		: deterministicDecision;
+
 	const auditId = emitMcpAudit({
 		publicToolName: registryEntry.name,
 		actionKind: registryEntry.actionKind,
 		classification: evaluation.classification,
 		decision,
 		result: decision === COMPASS_DECISIONS.DENY ? "denied" : "pending",
-		network: parsed.value.network,
+			network: conditionalInput.network,
 		metadata: {
 			registeredTool: true,
 			policyId: evaluation.policyEvaluation.policyId,
@@ -992,6 +1295,13 @@ async function handleConditionalTool(
 				oracleAgeSeconds: parsed.value.oracleAgeSeconds,
 				oracleConfidenceBps: parsed.value.oracleConfidenceBps,
 			},
+			...(llmMetadata?.llmConsulted
+				? {
+						llmConsulted: true,
+						llmDecision: llmMetadata.decision,
+						llmClamped: llmMetadata.clamped,
+					}
+				: {}),
 		},
 		params: {
 			inputAmountUsdc: parsed.value.inputAmountUsdc,
@@ -1141,9 +1451,9 @@ function parseTransferInput(
 		input.actorWallet = args.actorWallet;
 	}
 
-	if (typeof args.recipientKnown === "boolean") {
-		input.recipientKnown = args.recipientKnown;
-	}
+	input.recipientKnown = typeof args.recipientKnown === "boolean"
+		? args.recipientKnown
+		: false;
 
 	if (isWalletSafetyEvidence(args.walletSafety)) {
 		input.walletSafety = args.walletSafety;
@@ -1394,16 +1704,61 @@ function isNonNegativeNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function buildTransferResultData(
+async function buildTransferResultData(input: {
 	evaluation: Awaited<
 		ReturnType<typeof transferGateway.evaluateTransferGateway>
-	>,
-): Record<string, unknown> {
+	>;
+	input: EvaluateTransferGatewayInput;
+	includeExecutionPayload: boolean;
+}): Promise<Record<string, unknown>> {
+	const result: Record<string, unknown> = {
+		proposalEligible: input.evaluation.proposalEligible,
+		requiresApprovalCard: input.evaluation.requiresApprovalCard,
+		failClosedReason: input.evaluation.failClosedReason,
+		policyId: input.evaluation.policyEvaluation.policyId,
+	};
+
+	if (!input.includeExecutionPayload || !input.input.actorWallet) {
+		return result;
+	}
+
+	const transferPayload = await buildSolTransferTransactionPayload({
+		candidateId: input.evaluation.metadata.candidateId,
+		network: input.input.network,
+		sourceWallet: input.input.actorWallet,
+		recipientAddress: input.input.recipientAddress,
+		amountSol: input.input.amountSol,
+		rpcUrl: networkToRpcUrl(input.input.network),
+	});
+
+	if (transferPayload.ok === false) {
+		return {
+			...result,
+			executionPayloadStatus: "unavailable",
+			executionPayloadReason: transferPayload.reason,
+		};
+	}
+
+	// Record the payload in the pending store so execute_approved_action can
+	// verify that a devnet approval-bypass payload was actually built by Compass.
+	defaultPendingTransactionStore.record({
+		candidateId: input.evaluation.metadata.candidateId,
+		actionHash: transferPayload.payload.actionHash,
+		unsignedVersionedTransaction:
+			transferPayload.payload.unsignedVersionedTransaction,
+		network: input.input.network,
+		tool: "guarded_transfer_sol",
+		action: "transfer",
+	});
+
 	return {
-		proposalEligible: evaluation.proposalEligible,
-		requiresApprovalCard: evaluation.requiresApprovalCard,
-		failClosedReason: evaluation.failClosedReason,
-		policyId: evaluation.policyEvaluation.policyId,
+		...result,
+		executionPayloadStatus: "ready",
+		transactionPayload: transferPayload.payload,
+		executionPayload: transferPayload.payload,
+		sourceWallet: transferPayload.sourceWallet,
+		recipientAddress: transferPayload.recipientAddress,
+		lamports: transferPayload.lamports,
 	};
 }
 

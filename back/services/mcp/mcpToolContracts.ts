@@ -70,7 +70,7 @@ export type ExecuteApprovedActionTransactionPayload = {
 export type ExecuteApprovedActionInput = {
 	candidateId: string;
 	network?: "devnet" | "testnet" | "mainnet-beta";
-	approvalProof: OnchainActionApprovalProof;
+	approvalProof?: OnchainActionApprovalProof;
 	transactionPayload: ExecuteApprovedActionTransactionPayload;
 };
 

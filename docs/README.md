@@ -22,8 +22,20 @@ This folder contains the active product and migration documentation for **Compas
 | Wave 6 signer adapter     | [`wave-6-signer-adapter/`](wave-6-signer-adapter/)                   | Signer adapter boundary, local devnet signer, idempotency, and execute tool.        |
 | Wave 7 MCP compatibility  | [`wave-7-mcp-compatibility/`](wave-7-mcp-compatibility/)             | Approved execution hardening first, then upstream/mirrored MCP compatibility.       |
 | Wave 8 demo hardening     | [`wave-8-demo-hardening/`](wave-8-demo-hardening/)                   | Local demo runbook, redacted audit examples, and network readiness boundaries.      |
+| Wave 9 LLM/MCP setup      | [`wave-9-llm-mcp-setup/`](wave-9-llm-mcp-setup/)                     | Specs for bounded LLM decision support and quick OpenCode MCP setup.                |
+| Wave 10 two-tool MCP      | [`wave-10-two-tool-e2e-mcp/`](wave-10-two-tool-e2e-mcp/)             | Proposal for a simpler E2E MCP surface around transfer, swap, and safe read-only helpers. |
 | Backend architecture      | [`back-architecture.html`](back-architecture.html)                   | Current post-Wave-3.5 backend modules, flow, spec gaps, tests, and debts.           |
 | On-chain deployments      | [`onchain-deployments.md`](onchain-deployments.md)                   | Devnet program IDs and deployment notes.                                            |
+
+## Next architecture TODOs
+
+- [ ] Wave 10: collapse public MCP write surface toward `compass_transfer` and `compass_swap`.
+- [ ] Keep safe read-only helper tools public only when they provide user value and do not expose sensitive or non-public data.
+- [ ] Move simulation, guard-only, approval proof, transaction payload, and direct execution primitives behind Compass internals.
+- [ ] Treat chat-based `userConfirmedRisk` as devnet/demo-only; block non-devnet execution until external approval exists.
+- [ ] Define production approval outside chat/LLM, such as dashboard, Telegram, mobile, or wallet-native approval.
+- [ ] Define future executor adapter contracts for wallets and downstream MCPs; keep Wave 9 local-signer-only.
+- [ ] Preserve current swap provider/check model until a dedicated swap execution builder is designed.
 
 ## What moved to `legacy/`
 

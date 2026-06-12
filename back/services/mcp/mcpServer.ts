@@ -1,5 +1,9 @@
 import { pathToFileURL } from "node:url";
 
+// Load repo .env before anything else so COMPASS_LLM_* and other
+// config is available to the MCP stdio server without dotenv.
+import { loadRepoEnv } from "./loadRepoEnv";
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -136,6 +140,7 @@ function buildSafeMcpToolError(toolName: string): CallToolResult {
 }
 
 if (isDirectExecution()) {
+	loadRepoEnv();
 	startCompassMcpStdioServer().catch(() => {
 		console.error("Compass MCP stdio server failed to start.");
 		process.exit(1);
