@@ -73,11 +73,8 @@ describe("Wave 4 local MCP server entrypoint", () => {
 			"get_usdc_sol_quote",
 			"quote_swap",
 			"simulate_conditional_buy_oracle_check",
-			"guarded_transfer_sol",
-			"guarded_swap_sol_usdc",
-			"create_conditional_buy_sol",
-			"execute_approved_action",
-			"sign_and_send_transaction",
+			"compass_transfer",
+			"compass_swap",
 		]);
 		expect(JSON.stringify(response)).not.toMatch(
 			/private.*key|mnemonic|seed|rawTransaction|legacy_chat_transfer/i,

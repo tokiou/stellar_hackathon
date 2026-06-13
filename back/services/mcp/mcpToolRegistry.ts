@@ -42,6 +42,66 @@ const CONDITIONAL_ORACLE_CHECK_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
+// Wave 10: E2E transfer schema (replaces GUARDED_TRANSFER_SOL_SCHEMA for public use)
+export const COMPASS_TRANSFER_SCHEMA = {
+	type: "object",
+	properties: {
+		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
+		actorWallet: {
+			type: "string",
+			description:
+				"Optional source wallet. In local-signer demo mode Compass uses the configured signer wallet when omitted.",
+		},
+		amountSol: { type: "number", exclusiveMinimum: 0 },
+		recipientAddress: { type: "string" },
+		recipientKnown: {
+			type: "boolean",
+			description:
+				"Whether the recipient is known/trusted. If unsure, omit it and Compass treats the recipient as unknown.",
+		},
+		walletSafety: { type: "object" },
+		userConfirmedRisk: {
+			type: "boolean",
+			description:
+				"Required for devnet execution when guardrails require human approval. Must be true on devnet to proceed. Ignored on non-devnet networks — external approval is always required.",
+		},
+	},
+	required: ["amountSol", "recipientAddress"],
+	additionalProperties: false,
+} as const;
+
+// Wave 10: E2E swap schema (replaces GUARDED_SWAP_SOL_USDC_SCHEMA for public use)
+export const COMPASS_SWAP_SCHEMA = {
+	type: "object",
+	properties: {
+		network: { type: "string", enum: ["devnet", "testnet", "mainnet-beta"] },
+		actorWallet: { type: "string" },
+		input_token: { type: "string", enum: ["SOL", "USDC"] },
+		output_token: { type: "string", enum: ["SOL", "USDC"] },
+		input_amount: { type: "number", exclusiveMinimum: 0 },
+		slippage_bps: { type: "number", minimum: 0 },
+		protocol: { type: "string" },
+		token_known: { type: "boolean" },
+		token_mint: { type: "string" },
+		userConfirmedRisk: {
+			type: "boolean",
+			description:
+				"Required for devnet execution when guardrails require human approval. Must be true on devnet to proceed. Ignored on non-devnet networks — external approval is always required.",
+		},
+	},
+	required: [
+		"input_token",
+		"output_token",
+		"input_amount",
+		"slippage_bps",
+		"protocol",
+		"token_known",
+		"token_mint",
+	],
+	additionalProperties: false,
+} as const;
+
+// Internal-only schemas (not exposed via listMcpTools)
 const GUARDED_TRANSFER_SOL_SCHEMA = {
 	type: "object",
 	properties: {
@@ -161,6 +221,16 @@ const EXECUTE_APPROVED_ACTION_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
+// Tools exposed to MCP clients. Internal-only tools are excluded from this list
+// but remain in the full MCP_TOOL_REGISTRY for routing.
+const PUBLIC_MCP_TOOLS: readonly string[] = [
+	MCP_TOOL_NAMES.GET_USDC_SOL_QUOTE,
+	MCP_TOOL_NAMES.QUOTE_SWAP,
+	MCP_TOOL_NAMES.SIMULATE_CONDITIONAL_BUY_ORACLE_CHECK,
+	MCP_TOOL_NAMES.COMPASS_TRANSFER,
+	MCP_TOOL_NAMES.COMPASS_SWAP,
+];
+
 const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 	{
 		name: MCP_TOOL_NAMES.GET_USDC_SOL_QUOTE,
@@ -205,6 +275,36 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 		actionKind: "conditional_oracle_check",
 		mutates: false,
 	},
+	// Wave 10: Public E2E write tools
+	{
+		name: MCP_TOOL_NAMES.COMPASS_TRANSFER,
+		description:
+			"Transfer SOL or SPL tokens through Compass guardrails. Compass evaluates policy, risk, and approval before executing. On devnet, set userConfirmedRisk to true when guardrails require human approval. On non-devnet, external approval is always required.",
+		inputSchema: COMPASS_TRANSFER_SCHEMA,
+		metadata: {
+			riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION,
+			executionKind: MCP_TOOL_EXECUTION_KINDS.SENSITIVE_EXECUTION,
+			readOnly: false,
+		},
+		classificationToolName: "transfer",
+		actionKind: "transfer",
+		mutates: true,
+	},
+	{
+		name: MCP_TOOL_NAMES.COMPASS_SWAP,
+		description:
+			"Swap tokens through Compass guardrails. Compass evaluates swap policy and risk before returning a decision. Swap execution is pending a dedicated execution builder.",
+		inputSchema: COMPASS_SWAP_SCHEMA,
+		metadata: {
+			riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION,
+			executionKind: MCP_TOOL_EXECUTION_KINDS.SENSITIVE_EXECUTION,
+			readOnly: false,
+		},
+		classificationToolName: "swap",
+		actionKind: "swap",
+		mutates: true,
+	},
+	// Internal-only entries (excluded from public listMcpTools but kept for routing)
 	{
 		name: MCP_TOOL_NAMES.GUARDED_TRANSFER_SOL,
 		description:
@@ -277,7 +377,8 @@ const MCP_TOOL_REGISTRY: readonly CompassMcpToolRegistryEntry[] = [
 ];
 
 export function listMcpTools(): CompassMcpToolListItem[] {
-	return MCP_TOOL_REGISTRY.map(
+	const publicSet = new Set<string>(PUBLIC_MCP_TOOLS);
+	return MCP_TOOL_REGISTRY.filter((tool) => publicSet.has(tool.name)).map(
 		({ name, description, inputSchema, metadata }) => ({
 			name,
 			description,
