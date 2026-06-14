@@ -38,6 +38,14 @@ If validation fails, return a clear reason and suggested action: block, request 
 - Use `feature/wave-<n>-<description>` branches for wave/sub-feature work.
 - Feature wave branches should branch from and merge back into `release/compass_migration`.
 
+## SDD Review Budget Policy
+
+- When an SDD forecast exceeds the configured changed-line review budget, do not create multiple PRs by default.
+- Instead, split the implementation into sequential development phases that each respect the review budget as much as possible.
+- After each phase, stop and notify the user so they can review the result and decide whether to continue with the next phase.
+- These phases are manual checkpoints and confirmations only; they are not separate persistent artifacts unless the user explicitly asks for persistent phase documents.
+- Continue using normal branch policy: feature wave branches start from and merge back into `release/compass_migration`.
+
 ## GitHub Account
 
 - The correct GitHub account for pushing this project is `ram4_dev`.
