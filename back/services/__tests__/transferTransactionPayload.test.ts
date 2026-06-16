@@ -6,7 +6,7 @@ import {
 	VersionedTransaction,
 } from "@solana/web3.js";
 
-import { buildSolTransferTransactionPayload } from "../transferTransactionPayload";
+import { buildSolTransferTransactionPayload } from "../solana/transactions/transferTransactionPayload";
 
 describe("buildSolTransferTransactionPayload", () => {
 	it("builds a devnet unsigned VersionedTransaction payload for SOL transfer", async () => {

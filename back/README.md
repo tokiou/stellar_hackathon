@@ -7,14 +7,18 @@ Backend for **Compass MCP Guard**: services, contracts, policy engine, guardrail
 ```txt
 back/
 ├── services/
-│   ├── executionGateway.ts
-│   ├── policy/
-│   │   ├── defaultPolicy.ts
-│   │   ├── loadPolicy.ts
-│   │   ├── policyEngine.ts
-│   │   ├── policyContracts.ts
-│   │   ├── policyEvaluationResult.ts
-│   │   └── policySchema.ts
+│   ├── guardrail/
+│   │   ├── execution/
+│   │   │   ├── executionGateway.ts
+│   │   │   └── executionGatewayContracts.ts
+│   │   ├── policy/
+│   │   │   ├── defaultPolicy.ts
+│   │   │   ├── loadPolicy.ts
+│   │   │   ├── policyEngine.ts
+│   │   │   ├── policyContracts.ts
+│   │   │   ├── policyEvaluationResult.ts
+│   │   │   └── policySchema.ts
+│   │   └── router/
 │   ├── mcp/
 │   ├── transferGateway.ts
 │   ├── swapGateway.ts

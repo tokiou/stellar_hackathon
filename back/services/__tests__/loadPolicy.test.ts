@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { loadDefaultPolicy, loadPolicy } from "../policy/loadPolicy";
-import { validateCompassPolicy } from "../policy/policySchema";
+import { loadDefaultPolicy, loadPolicy } from "../guardrail/policy/loadPolicy";
+import { validateCompassPolicy } from "../guardrail/policy/policySchema";
 
 const validPolicy = {
 	policy_id: "test-policy",

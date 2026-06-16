@@ -9,7 +9,7 @@ import {
   verifyActionApproval,
   verifyOracleExecutionTx,
   verifyTransferGuardReadiness,
-} from '../onchainApproval';
+} from '../support/approval/onchainApproval';
 
 const PROGRAM_ID = '11111111111111111111111111111111';
 const USER = '11111111111111111111111111111111';

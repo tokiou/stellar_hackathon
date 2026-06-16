@@ -11,8 +11,10 @@
     "test": "vitest --config vitest.back.config.ts --run",
     "test:back": "vitest --config vitest.back.config.ts --run",
     "test:watch": "vitest --config vitest.back.config.ts",
-    "mcp:dev": "tsx back/services/mcp/mcpServer.ts",
-    "mcp:install:opencode": "node scripts/install-opencode-mcp.mjs"
+    "mcp:dev": "tsx back/services/mcp/server/mcpServer.ts",
+    "mcp:install:opencode": "node scripts/install-opencode-mcp.mjs",
+    "test:e2e": "node scripts/e2e-pipeline-test.mjs",
+    "test:e2e:verbose": "node scripts/e2e-pipeline-test.mjs --verbose"
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",

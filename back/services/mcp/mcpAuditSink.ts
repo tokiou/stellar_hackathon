@@ -1,16 +1,9 @@
-import type { AuditEvent } from "../executionGatewayContracts";
+/**
+ * Compatibility re-export for the MCP audit sink.
+ *
+ * The canonical implementation now lives in ./proxy/mcpAuditSink.ts.
+ * This file remains until all consumers (including tests) migrate to the
+ * new path.
+ */
 
-const mcpAuditEvents: AuditEvent[] = [];
-
-export function recordMcpAuditEvent(event: AuditEvent): string {
-	mcpAuditEvents.push(event);
-	return event.id;
-}
-
-export function listMcpAuditEvents(): AuditEvent[] {
-	return [...mcpAuditEvents];
-}
-
-export function resetMcpAuditEvents(): void {
-	mcpAuditEvents.length = 0;
-}
+export * from "./proxy/mcpAuditSink";
