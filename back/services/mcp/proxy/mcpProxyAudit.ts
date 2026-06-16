@@ -49,11 +49,23 @@ export type ProxyAuditFailureEvent = {
 	readonly timestamp: string;
 };
 
+/** Routing event: recorded when the LLM router classifies a tool. */
+export type ProxyAuditRoutingEvent = {
+	readonly type: "proxy_audit_routing";
+	readonly toolName: string;
+	readonly classification: string;
+	readonly reasoning: string;
+	readonly latencyMs: number;
+	readonly timestamp: string;
+	readonly auditId: string;
+};
+
 /** Union of all proxy audit event types. */
 export type ProxyAuditEvent =
 	| ProxyAuditIntentEvent
 	| ProxyAuditDenialEvent
 	| ProxyAuditForwardingEvent
+	| ProxyAuditRoutingEvent
 	| ProxyAuditFailureEvent;
 
 // ---------------------------------------------------------------------------
@@ -210,6 +222,33 @@ export function recordProxyAuditFailure(event: {
 	};
 	// Best-effort: push even if audit is in failure state
 	proxyAuditEvents.push(auditEvent);
+}
+
+/**
+ * Record a proxy audit routing event.
+ *
+ * Logs the LLM router's classification, reasoning, and latency.
+ * Returns the audit ID for traceability.
+ */
+export function recordProxyAuditRouting(event: {
+	toolName: string;
+	classification: string;
+	reasoning: string;
+	latencyMs: number;
+	existingAuditId?: string;
+}): string {
+	const auditId = event.existingAuditId ?? generateAuditId();
+	const auditEvent: ProxyAuditRoutingEvent = {
+		type: "proxy_audit_routing",
+		toolName: event.toolName,
+		classification: event.classification,
+		reasoning: event.reasoning,
+		latencyMs: event.latencyMs,
+		timestamp: new Date().toISOString(),
+		auditId,
+	};
+	proxyAuditEvents.push(auditEvent);
+	return auditId;
 }
 
 /**

@@ -6,7 +6,7 @@
  * - T11_1.3: allowed/denied/fail-closed downstream tools/call
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	NATIVE_COMPASS_TOOL_NAMES,
@@ -526,3 +526,159 @@ describe("Wave 11 MCP proxy dispatcher — tools/call enforcement", () => {
 		expect(downstream.forwardedSafeRequests).toHaveLength(0);
 	});
 });
+
+describe("LLM Router integration", () => {
+	const originalEnv = { ...process.env };
+
+	beforeEach(() => {
+		resetProxyAuditEvents();
+		vi.restoreAllMocks();
+		process.env = { ...originalEnv };
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		process.env = { ...originalEnv };
+	});
+
+	it("keeps current behavior when router is disabled", async () => {
+		process.env.COMPASS_LLM_ROUTER_ENABLED = "false";
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "rebalance_portfolio",
+			arguments: { target: "aggressive" },
+		});
+
+		expect(result.outcome).toBe("require_approval");
+		expect(downstream.recordedCalls).toHaveLength(0);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("allows when router classifies the tool as skip", async () => {
+		mockRouterEnv();
+		mockChatCompletions({ classification: "skip", reasoning: "Not a guarded action." });
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "summarize_portfolio",
+			arguments: { wallet: "wallet" },
+		});
+
+		expect(result.outcome).toBe("allow");
+		expect(downstream.recordedCalls).toEqual([
+			{ toolName: "summarize_portfolio", arguments: { wallet: "wallet" } },
+		]);
+	});
+
+	it("allows transfer classification when LLM Decision allows", async () => {
+		mockRouterEnv({ decisionEnabled: true });
+		mockChatCompletions(
+			{ classification: "transfer", reasoning: "Transfer intent." },
+			allowDecision(),
+		);
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "portfolio_action",
+			arguments: { amount: 1, recipient: "wallet" },
+		});
+
+		expect(result.outcome).toBe("allow");
+		expect(downstream.recordedCalls).toHaveLength(1);
+	});
+
+	it("denies transfer classification when LLM Decision denies", async () => {
+		mockRouterEnv({ decisionEnabled: true });
+		mockChatCompletions(
+			{ classification: "transfer", reasoning: "Transfer intent." },
+			denyDecision(),
+		);
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "portfolio_action",
+			arguments: { amount: 1, recipient: "wallet" },
+		});
+
+		expect(result.outcome).toBe("deny");
+		expect(downstream.recordedCalls).toHaveLength(0);
+	});
+
+	it("allows swap classification when LLM Decision allows", async () => {
+		mockRouterEnv({ decisionEnabled: true });
+		mockChatCompletions(
+			{ classification: "swap", reasoning: "Swap intent." },
+			allowDecision(),
+		);
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "token_action",
+			arguments: { inputToken: "SOL", outputToken: "USDC" },
+		});
+
+		expect(result.outcome).toBe("allow");
+		expect(downstream.recordedCalls).toHaveLength(1);
+	});
+
+	it("requires approval when router classification is unknown", async () => {
+		mockRouterEnv();
+		mockChatCompletions({ classification: "unknown", reasoning: "Ambiguous." });
+		const downstream = createFakeDownstreamMcpServer();
+		const dispatcher = createProxyDispatcher({ downstream });
+
+		const result = await dispatcher.callTool({
+			toolName: "rebalance_portfolio",
+			arguments: { target: "aggressive" },
+		});
+
+		expect(result.outcome).toBe("require_approval");
+		expect(downstream.recordedCalls).toHaveLength(0);
+	});
+});
+
+function mockRouterEnv(options: { decisionEnabled?: boolean } = {}): void {
+	process.env.COMPASS_LLM_ROUTER_ENABLED = "true";
+	process.env.COMPASS_LLM_DECISION_ENABLED = options.decisionEnabled ? "true" : "false";
+	process.env.COMPASS_LLM_PROVIDER = "opencode-go";
+	process.env.COMPASS_LLM_MODEL = "kimi-k2.5";
+	process.env.COMPASS_LLM_BASE_URL = "https://opencode.ai/zen/go/v1/chat/completions";
+}
+
+function mockChatCompletions(...outputs: Record<string, unknown>[]): void {
+	const pending = [...outputs];
+	vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		const output = pending.shift();
+		return {
+			ok: true,
+			json: vi.fn().mockResolvedValue({
+				choices: [{ message: { content: JSON.stringify(output) } }],
+			}),
+		} as unknown as Response;
+	});
+}
+
+function allowDecision(): Record<string, unknown> {
+	return {
+		decision: "ALLOW",
+		confidence: 0.9,
+		reasonCodes: ["LOW_RISK"],
+		rationale: "Allowed by LLM Decision.",
+	};
+}
+
+function denyDecision(): Record<string, unknown> {
+	return {
+		decision: "DENY",
+		confidence: 0.9,
+		reasonCodes: ["HIGH_RISK"],
+		rationale: "Denied by LLM Decision.",
+	};
+}

@@ -12,11 +12,19 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import { evaluateLlmMetadata, resolveLlmConfig } from "../../intelligence/llm-decision/llmDecisionAdapter";
+import { routeToolCall, resolveRouterConfig } from "../../intelligence/llm-router/llmRouterAdapter";
+import type {
+	LlmRouterConfig,
+	LlmRouterInput,
+} from "../../intelligence/llm-router/llmRouterContracts";
+import type { CompassDecision } from "../../guardrail/execution/executionGatewayContracts";
 import type {
 	ProxyCallToolResult,
 	ProxyDecision,
 	ProxyDispatcherConfig,
 	ProxyListToolsResult,
+	ProxyRouterClassification,
 } from "./mcpProxyContracts";
 import { isSafeNonToolMethod } from "./mcpProxyContracts";
 import { evaluateProxyToolCallPolicy } from "./mcpProxyPolicyInterceptor";
@@ -25,6 +33,7 @@ import {
 	recordProxyAuditDenial,
 	recordProxyAuditForwarding,
 	recordProxyAuditIntent,
+	recordProxyAuditRouting,
 	redactSecretArguments,
 } from "./mcpProxyAudit";
 
@@ -115,31 +124,155 @@ export function createProxyDispatcher(
 				args.arguments,
 				policyOverride ? { policyDecision: policyOverride } : undefined,
 			);
+			let forwardingDecision = evaluatedDecision;
 
-			// 3. If policy does not allow, do NOT forward — return policy outcome
-			if (evaluatedDecision.outcome !== "allow") {
+			// 3. If policy requires approval but router is enabled, try LLM routing
+			if (evaluatedDecision.outcome === "require_approval") {
+				const routerConfig: LlmRouterConfig = resolveRouterConfig();
+
+				if (routerConfig.enabled) {
+					const routerInput: LlmRouterInput = {
+						toolName: args.toolName,
+						toolParams: args.arguments,
+					};
+
+					const routerResult = await routeToolCall(routerInput, routerConfig);
+					const routerClassification: ProxyRouterClassification =
+						routerResult.classification;
+					recordProxyAuditRouting({
+						toolName: args.toolName,
+						classification: routerClassification,
+						reasoning: routerResult.reasoning,
+						latencyMs: routerResult.latencyMs,
+					});
+
+					switch (routerClassification) {
+						case "skip":
+							forwardingDecision = {
+								...evaluatedDecision,
+								outcome: "allow",
+								reason: `LLM Router classified tool "${args.toolName}" as skip; forwarding allowed.`,
+								routerMetadata: {
+									consulted: true,
+									classification: "skip",
+									reasoning: routerResult.reasoning,
+									latencyMs: routerResult.latencyMs,
+								},
+							};
+							break;
+
+						case "transfer":
+						case "swap": {
+							const llmConfig = resolveLlmConfig();
+							const llmDecision = await evaluateLlmMetadata({
+								input: {
+									toolName: args.toolName,
+									actionKind: routerClassification,
+									network: "solana",
+									deterministicDecision: "ALLOW" as CompassDecision,
+									riskClass: routerClassification,
+									reasonCodes: [
+										`router_classified_as_${routerClassification}`,
+									],
+									sanitizedContext: { toolParams: args.arguments },
+									sanitized: true,
+								},
+								config: llmConfig,
+							});
+
+							if (llmDecision.decision === "ALLOW") {
+								forwardingDecision = {
+									...evaluatedDecision,
+									outcome: "allow",
+									reason: `LLM Decision allowed ${routerClassification} tool "${args.toolName}" after router classification.`,
+									routerMetadata: {
+										consulted: true,
+										classification: routerClassification,
+										reasoning: routerResult.reasoning,
+										latencyMs: routerResult.latencyMs,
+									},
+								};
+								break;
+							}
+
+							const outcome =
+								llmDecision.decision === "DENY" ? "deny" : "require_approval";
+							const finalDecision: ProxyDecision = {
+								outcome,
+								reason: `LLM Decision ${outcome}: ${llmDecision.llmRationale ?? routerResult.reasoning}`,
+								suggestedAction:
+									outcome === "deny" ? undefined : "Review and approve manually.",
+								routerMetadata: {
+									consulted: true,
+									classification: routerClassification,
+									reasoning: routerResult.reasoning,
+									latencyMs: routerResult.latencyMs,
+								},
+							};
+							recordProxyAuditDenial({
+								toolName: args.toolName,
+								policyDecision: finalDecision,
+								denialReason: finalDecision.reason,
+							});
+							return {
+								outcome: finalDecision.outcome,
+								reason: finalDecision.reason,
+								suggestedAction: finalDecision.suggestedAction,
+								policyDecision: finalDecision,
+							};
+						}
+
+						case "unknown": {
+							const unknownDecision: ProxyDecision = {
+								...evaluatedDecision,
+								routerMetadata: {
+									consulted: true,
+									classification: "unknown",
+									reasoning: routerResult.reasoning,
+									latencyMs: routerResult.latencyMs,
+								},
+							};
+							const unknownReason = `require_approval: LLM Router could not classify tool "${args.toolName}". ${evaluatedDecision.reason}`;
+							recordProxyAuditDenial({
+								toolName: args.toolName,
+								policyDecision: unknownDecision,
+								denialReason: unknownReason,
+							});
+							return {
+								outcome: "require_approval",
+								reason: unknownReason,
+								suggestedAction: evaluatedDecision.suggestedAction,
+								policyDecision: unknownDecision,
+							};
+						}
+					}
+				}
+			}
+
+			// 4. If policy does not allow, do NOT forward — return policy outcome
+			if (forwardingDecision.outcome !== "allow") {
 				const decisionPrefix =
-					evaluatedDecision.outcome === "deny" ? "denied" : "require_approval";
-				const denialReason = `${decisionPrefix}: ${evaluatedDecision.reason}`;
+					forwardingDecision.outcome === "deny" ? "denied" : "require_approval";
+				const denialReason = `${decisionPrefix}: ${forwardingDecision.reason}`;
 				recordProxyAuditDenial({
 					toolName: args.toolName,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 					denialReason,
 				});
 				return {
-					outcome: evaluatedDecision.outcome,
+					outcome: forwardingDecision.outcome,
 					reason: denialReason,
-					suggestedAction: evaluatedDecision.suggestedAction,
-					policyDecision: evaluatedDecision,
+					suggestedAction: forwardingDecision.suggestedAction,
+					policyDecision: forwardingDecision,
 				};
 			}
 
-			// 4. Policy allows — record audit intent before forwarding
+			// 5. Policy allows — record audit intent before forwarding
 			let auditId: string;
 			try {
 				auditId = recordProxyAuditIntent({
 					toolName: args.toolName,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 				});
 			} catch {
 				// Audit write failure: fail closed, deny before forwarding
@@ -152,7 +285,7 @@ export function createProxyDispatcher(
 				};
 				recordProxyAuditDenial({
 					toolName: args.toolName,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 					denialReason: decision.reason,
 				});
 				return {
@@ -163,7 +296,7 @@ export function createProxyDispatcher(
 				};
 			}
 
-			// 5. Forward allowed call to downstream
+			// 6. Forward allowed call to downstream
 			try {
 				const redactedArgs = redactSecretArguments(args.arguments);
 				void redactedArgs; // Available for future audit enrichment
@@ -173,10 +306,10 @@ export function createProxyDispatcher(
 					arguments: args.arguments,
 				});
 
-				// 6. Record forwarding outcome
+				// 7. Record forwarding outcome
 				recordProxyAuditForwarding({
 					toolName: args.toolName,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 					forwardingOutcome: "success",
 					existingAuditId: auditId,
 				});
@@ -185,7 +318,7 @@ export function createProxyDispatcher(
 					outcome: "allow",
 					reason: `Tool "${args.toolName}" allowed and forwarded to downstream.`,
 					data: downstreamResult as CallToolResult,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 					auditId,
 				};
 			} catch (error) {
@@ -195,7 +328,7 @@ export function createProxyDispatcher(
 				// Downstream call failure: deny fail-closed
 				recordProxyAuditForwarding({
 					toolName: args.toolName,
-					policyDecision: evaluatedDecision,
+					policyDecision: forwardingDecision,
 					forwardingOutcome: "failure",
 					existingAuditId: auditId,
 				});

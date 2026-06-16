@@ -72,6 +72,27 @@ export type ProxyDecision = {
 	reason: string;
 	/** Suggested next action for the operator or client. */
 	suggestedAction?: string;
+	/** Router metadata (present when LLM router was consulted). */
+	routerMetadata?: ProxyRouterMetadata;
+};
+
+// ---------------------------------------------------------------------------
+// Router decision types
+// ---------------------------------------------------------------------------
+
+/** Classification from the LLM Router (added to proxy decisions). */
+export type ProxyRouterClassification = "transfer" | "swap" | "skip" | "unknown";
+
+/** Router metadata attached to proxy decisions. */
+export type ProxyRouterMetadata = {
+	/** Whether the LLM router was consulted. */
+	consulted: boolean;
+	/** Router classification result (only present if consulted). */
+	classification?: ProxyRouterClassification;
+	/** Router reasoning (only present if consulted). */
+	reasoning?: string;
+	/** Router latency in ms (only present if consulted). */
+	latencyMs?: number;
 };
 
 // ---------------------------------------------------------------------------

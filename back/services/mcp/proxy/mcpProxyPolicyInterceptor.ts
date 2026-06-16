@@ -24,6 +24,7 @@ import type { ProxyDecision } from "./mcpProxyContracts";
 	| "read_only"
 	| "ui_bootstrap"
 	| "preparation_simulation"
+	| "routable_mutation"
 	| "sensitive_execution"
 	| "signing"
 	| "unknown";
@@ -59,6 +60,21 @@ const SIGNING_TARGET_TOKENS = new Set([
 	"transaction",
 ]);
 
+/**
+ * Tokens that should be routed to the LLM Router for classification.
+ * These are potentially financial actions (transfer, swap) that need
+ * context-aware classification rather than blanket denial.
+ */
+const ROUTABLE_MUTATION_TOKENS = new Set([
+	"send",
+	"swap",
+	"transfer",
+]);
+
+/**
+ * Tokens that are unambiguously dangerous operations.
+ * These bypass the router and are denied directly by the prefilter.
+ */
 const SENSITIVE_EXECUTION_TOKENS = new Set([
 	"approve",
 	"burn",
@@ -68,10 +84,7 @@ const SENSITIVE_EXECUTION_TOKENS = new Set([
 	"execute",
 	"mint",
 	"sell",
-	"send",
 	"stake",
-	"swap",
-	"transfer",
 	"unstake",
 	"withdraw",
 	"write",
@@ -152,6 +165,12 @@ export function classifyProxyToolCall(toolName: string): ProxyRiskClass {
 		return "sensitive_execution";
 	}
 
+	// Routable mutations: financial actions that should go to the LLM Router
+	// for context-aware classification (transfer vs swap vs skip vs unknown).
+	if (hasAnyToken(tokens, ROUTABLE_MUTATION_TOKENS)) {
+		return "routable_mutation";
+	}
+
 	if (
 		(tokens.some((t) => READ_ONLY_VERBS.has(t))) &&
 		!hasAnyToken(tokens, AMBIGUOUS_MUTATION_TOKENS)
@@ -223,6 +242,11 @@ export function evaluateProxyToolCallPolicy(
 			return {
 				outcome: "allow",
 				reason: `Tool "${toolName}" classified as preparation/simulation; allowed by default policy.`,
+			};
+		case "routable_mutation":
+			return {
+				outcome: "require_approval",
+				reason: `Tool "${toolName}" classified as routable mutation; routing via LLM Router for transfer/swap classification.`,
 			};
 		case "sensitive_execution":
 			return {
