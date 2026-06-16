@@ -4,11 +4,11 @@ import {
 	buildAuditEvent,
 	classifyToolCall,
 	createActionCandidate,
-} from "../executionGateway";
+} from "../guardrail/execution/executionGateway";
 import {
 	COMPASS_DECISIONS,
 	TOOL_RISK_CLASSES,
-} from "../executionGatewayContracts";
+} from "../guardrail/execution/executionGatewayContracts";
 
 describe("execution gateway contracts", () => {
 	it("exposes the canonical Wave 1 decision values", () => {

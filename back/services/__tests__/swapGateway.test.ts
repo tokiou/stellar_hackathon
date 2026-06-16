@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { COMPASS_DECISIONS } from "../executionGatewayContracts";
-import { loadDefaultPolicy } from "../policy/loadPolicy";
-import { POLICY_REASON_CODES } from "../policy/policyContracts";
+import { COMPASS_DECISIONS } from "../guardrail/execution/executionGatewayContracts";
+import { loadDefaultPolicy } from "../guardrail/policy/loadPolicy";
+import { POLICY_REASON_CODES } from "../guardrail/policy/policyContracts";
 
 const policy = loadDefaultPolicy();
 const actorWallet = "11111111111111111111111111111111";
 
 async function loadSwapGateway() {
 	try {
-		return await import("../swapGateway");
+		return await import("../domains/swap/swapGateway");
 	} catch (error) {
 		throw new Error(
 			`Wave 5a swapGateway implementation is missing or not loadable: ${String(error)}`,
@@ -19,7 +19,7 @@ async function loadSwapGateway() {
 
 async function loadSwapGatewayContracts() {
 	try {
-		return await import("../swapGatewayContracts");
+		return await import("../domains/swap/swapGatewayContracts");
 	} catch (error) {
 		throw new Error(
 			`Wave 5a swapGatewayContracts implementation is missing or not loadable: ${String(error)}`,

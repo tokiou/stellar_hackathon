@@ -54,7 +54,7 @@ describe("createSignerAdapter", () => {
 		// Ensure the env flag is not set
 		delete process.env.COMPASS_LOCAL_SIGNER_ENABLED;
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -66,7 +66,7 @@ describe("createSignerAdapter", () => {
 	it("returns LOCAL_SIGNER_NOT_CONFIGURED when COMPASS_LOCAL_SIGNER_ENABLED is not 'true'", async () => {
 		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "false";
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -79,7 +79,7 @@ describe("createSignerAdapter", () => {
 		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
 		process.env.SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com";
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -92,7 +92,7 @@ describe("createSignerAdapter", () => {
 		process.env.COMPASS_LOCAL_SIGNER_ENABLED = "true";
 		process.env.SOLANA_RPC_URL = "https://solana-mainnet.g.alchemy.com/v2/xxx";
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			rpcUrl: "https://api.mainnet-beta.solana.com",
@@ -111,7 +111,7 @@ describe("createSignerAdapter", () => {
 		const testKeypair = Keypair.generate();
 		const secretKeyBytes = testKeypair.secretKey;
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({ localSecretKey: secretKeyBytes });
 
@@ -129,7 +129,7 @@ describe("createSignerAdapter", () => {
 		const testKeypair = Keypair.generate();
 		const secretKeyBytes = testKeypair.secretKey;
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: secretKeyBytes,
@@ -158,7 +158,7 @@ describe("LocalKeypairAdapter", () => {
 		const testKeypair = Keypair.generate();
 		const expectedAddress = testKeypair.publicKey.toBase58();
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: testKeypair.secretKey,
@@ -176,7 +176,7 @@ describe("LocalKeypairAdapter", () => {
 
 		const testKeypair = Keypair.generate();
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: testKeypair.secretKey,
@@ -193,7 +193,7 @@ describe("LocalKeypairAdapter", () => {
 
 		const testKeypair = Keypair.generate();
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: testKeypair.secretKey,
@@ -218,7 +218,7 @@ describe("LocalKeypairAdapter", () => {
 		const testKeypair = Keypair.generate();
 		const tx = createUnsignedVersionedTransaction(testKeypair.publicKey);
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: testKeypair.secretKey,
@@ -247,7 +247,7 @@ describe("LocalKeypairAdapter", () => {
 			testKeypair.secretKey,
 		);
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter(); // No localSecretKey in config
 
@@ -268,7 +268,7 @@ describe("LocalKeypairAdapter", () => {
 			testKeypair.secretKey,
 		);
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -287,7 +287,7 @@ describe("LocalKeypairAdapter", () => {
 		);
 		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = testKeypair.publicKey.toBase58();
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -304,7 +304,7 @@ describe("LocalKeypairAdapter", () => {
 		);
 		process.env.COMPASS_LOCAL_SIGNER_PUBLIC_KEY = otherKeypair.publicKey.toBase58();
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter();
 
@@ -318,7 +318,7 @@ describe("LocalKeypairAdapter", () => {
 		process.env.SOLANA_RPC_URL = "https://api.devnet.solana.com";
 		delete process.env.COMPASS_LOCAL_SIGNER_SECRET_KEY_B58;
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter(); // No localSecretKey, no env var
 
@@ -336,7 +336,7 @@ describe("LocalKeypairAdapter", () => {
 			envKeypair.secretKey,
 		);
 
-		const { createSignerAdapter } = await import("../signerAdapter");
+		const { createSignerAdapter } = await import("../support/signer/signerAdapter");
 
 		const result = createSignerAdapter({
 			localSecretKey: configKeypair.secretKey,

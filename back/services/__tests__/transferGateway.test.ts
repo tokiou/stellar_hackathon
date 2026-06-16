@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAuditEvent } from "../executionGateway";
-import { COMPASS_DECISIONS } from "../executionGatewayContracts";
-import { loadDefaultPolicy } from "../policy/loadPolicy";
-import { POLICY_REASON_CODES } from "../policy/policyContracts";
+import { buildAuditEvent } from "../guardrail/execution/executionGateway";
+import { COMPASS_DECISIONS } from "../guardrail/execution/executionGatewayContracts";
+import { loadDefaultPolicy } from "../guardrail/policy/loadPolicy";
+import { POLICY_REASON_CODES } from "../guardrail/policy/policyContracts";
 
 const policy = loadDefaultPolicy();
 
@@ -14,7 +14,7 @@ const blockedRecipient = "known_bad_address";
 
 async function loadTransferGateway() {
 	try {
-		return await import("../transferGateway");
+		return await import("../domains/transfer/transferGateway");
 	} catch (error) {
 		throw new Error(
 			`Wave 3 transferGateway implementation is missing or not loadable: ${String(error)}`,
@@ -24,7 +24,7 @@ async function loadTransferGateway() {
 
 async function loadTransferGatewayContracts() {
 	try {
-		return await import("../transferGatewayContracts");
+		return await import("../domains/transfer/transferGatewayContracts");
 	} catch (error) {
 		throw new Error(
 			`Wave 3 transferGatewayContracts implementation is missing or not loadable: ${String(error)}`,

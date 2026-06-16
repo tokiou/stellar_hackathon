@@ -11,7 +11,7 @@
     "test": "vitest --config vitest.back.config.ts --run",
     "test:back": "vitest --config vitest.back.config.ts --run",
     "test:watch": "vitest --config vitest.back.config.ts",
-    "mcp:dev": "tsx back/services/mcp/mcpServer.ts",
+    "mcp:dev": "tsx back/services/mcp/server/mcpServer.ts",
     "mcp:install:opencode": "node scripts/install-opencode-mcp.mjs"
   },
   "dependencies": {

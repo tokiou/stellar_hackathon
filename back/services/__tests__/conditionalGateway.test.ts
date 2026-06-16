@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { COMPASS_DECISIONS } from "../executionGatewayContracts";
-import { loadDefaultPolicy } from "../policy/loadPolicy";
-import type { EvaluateConditionalGatewayInput } from "../conditionalGatewayContracts";
-import { POLICY_REASON_CODES } from "../policy/policyContracts";
+import { COMPASS_DECISIONS } from "../guardrail/execution/executionGatewayContracts";
+import { loadDefaultPolicy } from "../guardrail/policy/loadPolicy";
+import type { EvaluateConditionalGatewayInput } from "../domains/conditional-parking-lot/conditionalGatewayContracts";
+import { POLICY_REASON_CODES } from "../guardrail/policy/policyContracts";
 
 const policy = loadDefaultPolicy();
 const actorWallet = "11111111111111111111111111111111";
@@ -12,7 +12,7 @@ const currentUnixTimestamp = 1_780_966_400;
 
 async function loadConditionalGateway() {
 	try {
-		return await import("../conditionalGateway");
+		return await import("../domains/conditional-parking-lot/conditionalGateway");
 	} catch (error) {
 		throw new Error(
 			`Wave 5b conditionalGateway implementation is missing or not loadable: ${String(error)}`,
@@ -22,7 +22,7 @@ async function loadConditionalGateway() {
 
 async function loadConditionalGatewayContracts() {
 	try {
-		return await import("../conditionalGatewayContracts");
+		return await import("../domains/conditional-parking-lot/conditionalGatewayContracts");
 	} catch (error) {
 		throw new Error(
 			`Wave 5b conditionalGatewayContracts implementation is missing or not loadable: ${String(error)}`,

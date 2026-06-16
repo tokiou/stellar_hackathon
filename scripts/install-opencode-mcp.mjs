@@ -298,16 +298,20 @@ function isCompassWrappedEntry(entry) {
 export function buildCompassWrappedMcpConfig(config) {
 	const mcp = config.mcp ?? {};
 	const downstreamEntries = Object.entries(mcp).filter(
-		([key, entry]) => key !== COMPASS_MCP_KEY && entry?.enabled !== false,
+		([key, entry]) => key !== COMPASS_MCP_KEY && entry?.enabled !== false && entry?.type === "local",
 	);
 
 	if (downstreamEntries.length === 0) {
+		const hasRemoteEntries = Object.entries(mcp).some(
+			([key, entry]) => key !== COMPASS_MCP_KEY && entry?.enabled !== false && entry?.type === "remote",
+		);
 		if (isCompassWrappedEntry(mcp[COMPASS_MCP_KEY])) {
 			return config;
 		}
-		throw new Error(
-			"No downstream MCP entry found to wrap. Configure one local MCP server before installing Compass.",
-		);
+		const hint = hasRemoteEntries
+			? " Found remote/HTTPS MCP entries (e.g. supabase) but Compass only wraps local stdio servers. Add a local MCP server as downstream."
+			: " Configure one local MCP server before installing Compass.";
+		throw new Error(`No local downstream MCP entry found to wrap.${hint}`);
 	}
 	if (downstreamEntries.length > 1) {
 		throw new Error(

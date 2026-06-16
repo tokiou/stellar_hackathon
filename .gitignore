@@ -78,6 +78,7 @@ dynamic_private_key
 *.pfx
 id_rsa
 id_ed25519
+cdp_api_key.json
 
 # Accidental space-named files
 /[ ]
