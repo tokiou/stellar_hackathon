@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { debug } from "../debugLogger";
 import {
 	COMPASS_DECISIONS,
 	TOOL_RISK_CLASSES,
@@ -41,6 +42,7 @@ export function classifyToolCall(
 	const toolName = input.toolName;
 
 	if (READ_ONLY_TOOLS.has(toolName)) {
+		debug("execution", "classifyToolCall", "Classified as read-only", { toolName, riskClass: TOOL_RISK_CLASSES.READ_ONLY });
 		return {
 			toolName,
 			riskClass: TOOL_RISK_CLASSES.READ_ONLY,
@@ -51,6 +53,7 @@ export function classifyToolCall(
 	}
 
 	if (PREPARATION_SIMULATION_TOOLS.has(toolName)) {
+		debug("execution", "classifyToolCall", "Classified as preparation/simulation", { toolName, riskClass: TOOL_RISK_CLASSES.PREPARATION_SIMULATION });
 		return {
 			toolName,
 			riskClass: TOOL_RISK_CLASSES.PREPARATION_SIMULATION,
@@ -61,6 +64,7 @@ export function classifyToolCall(
 	}
 
 	if (SIGNING_TOOLS.has(toolName)) {
+		debug("execution", "classifyToolCall", "Classified as signing", { toolName, riskClass: TOOL_RISK_CLASSES.SIGNING });
 		return {
 			toolName,
 			riskClass: TOOL_RISK_CLASSES.SIGNING,
@@ -76,6 +80,7 @@ export function classifyToolCall(
 	}
 
 	if (SENSITIVE_EXECUTION_TOOLS.has(toolName)) {
+		debug("execution", "classifyToolCall", "Classified as sensitive execution", { toolName, riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION });
 		return {
 			toolName,
 			riskClass: TOOL_RISK_CLASSES.SENSITIVE_EXECUTION,
@@ -86,6 +91,7 @@ export function classifyToolCall(
 	}
 
 	if (input.mutates) {
+		debug("execution", "classifyToolCall", "Classified as unknown mutating", { toolName, riskClass: TOOL_RISK_CLASSES.BLOCKED_UNKNOWN });
 		return {
 			toolName,
 			riskClass: TOOL_RISK_CLASSES.BLOCKED_UNKNOWN,
@@ -95,6 +101,7 @@ export function classifyToolCall(
 		};
 	}
 
+	debug("execution", "classifyToolCall", "Classified as unknown", { toolName, riskClass: TOOL_RISK_CLASSES.BLOCKED_UNKNOWN });
 	return {
 		toolName,
 		riskClass: TOOL_RISK_CLASSES.BLOCKED_UNKNOWN,
@@ -107,6 +114,10 @@ export function classifyToolCall(
 export function createActionCandidate(
 	input: ActionCandidateInput,
 ): ActionCandidate {
+	debug("execution", "createCandidate", "Creating action candidate", {
+		toolName: input.toolName,
+		actionKind: input.actionKind,
+	});
 	return {
 		id: input.id ?? randomUUID(),
 		chain: input.chain,

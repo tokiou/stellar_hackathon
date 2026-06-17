@@ -1,12 +1,32 @@
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
 	loadRepoEnv,
 	parseEnvContents,
 	resetLoadRepoEnvFlag,
 } from "../mcp/loadRepoEnv";
+import { getLogFile } from "../guardrail/debugLogger";
+
+function readDebugLog(): string {
+	const logFile = getLogFile();
+	if (!existsSync(logFile)) return "";
+	return readFileSync(logFile, "utf-8");
+}
+
+function setupDebugEnv(): void {
+	process.env["COMPASS_DEBUG"] = "connection";
+}
+
+function teardownDebugEnv(): void {
+	delete process.env["COMPASS_DEBUG"];
+	const logFile = getLogFile();
+	const logDir = join(logFile, "..");
+	if (existsSync(logDir)) {
+		rmSync(logDir, { recursive: true, force: true });
+	}
+}
 
 // ---------------------------------------------------------------------------
 // parseEnvContents
@@ -147,19 +167,15 @@ describe("loadRepoEnv", () => {
 		mkdirSync(tmpDir, { recursive: true });
 		writeFileSync(join(tmpDir, ".env"), "_TEST_ENV_SECRET=sk-super-secret-value\n_TEST_ENV_FOO=visible");
 
-		const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		setupDebugEnv();
 		loadRepoEnv({ overrideRootDir: tmpDir });
 
-		const loggedCalls = consoleSpy.mock.calls.map((args) => String(args[0]));
-		const maskedLog = loggedCalls.find((msg) => msg.includes("_TEST_ENV_SECRET=***"));
-		const visibleLog = loggedCalls.find((msg) => msg.includes("_TEST_ENV_FOO"));
-		const leakedSecret = loggedCalls.find((msg) => msg.includes("sk-super-secret-value"));
+		const log = readDebugLog();
+		expect(log).toContain("_TEST_ENV_SECRET=***");
+		expect(log).toContain("_TEST_ENV_FOO");
+		expect(log).not.toContain("sk-super-secret-value");
 
-		expect(maskedLog).toBeDefined();
-		expect(visibleLog).toBeDefined();
-		expect(leakedSecret).toBeUndefined();
-
-		consoleSpy.mockRestore();
+		teardownDebugEnv();
 	});
 
 	it("loads COMPASS_LLM_* variables from .env", () => {

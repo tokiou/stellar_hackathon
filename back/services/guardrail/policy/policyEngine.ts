@@ -2,6 +2,7 @@ import {
 	COMPASS_DECISIONS,
 	TOOL_RISK_CLASSES,
 } from "../../guardrail/execution/executionGatewayContracts";
+import { debug } from "../debugLogger";
 import {
 	decisionFromOutcome as decision,
 	isNonNegativeFiniteNumber,
@@ -24,6 +25,10 @@ function isPositiveFiniteNumber(value: number): boolean {
 
 export function evaluateAction(input: EvaluateActionInput): PolicyEvaluation {
 	const { candidate, classification, policy } = input;
+	debug("policy", "evaluateAction", "Evaluating action", {
+		toolName: candidate.toolName,
+		riskClass: classification.riskClass,
+	});
 
 	const signingDecision = evaluateSigning(input);
 	if (signingDecision) {
@@ -58,17 +63,29 @@ export function evaluateAction(input: EvaluateActionInput): PolicyEvaluation {
 	}
 
 	if (candidate.actionKind === "transfer") {
+		debug("policy", "evaluateAction", "Evaluating transfer policy", {
+			actionKind: candidate.actionKind,
+		});
 		return evaluateTransfer(input);
 	}
 
 	if (candidate.actionKind === "swap") {
+		debug("policy", "evaluateAction", "Evaluating swap policy", {
+			actionKind: candidate.actionKind,
+		});
 		return evaluateSwap(input);
 	}
 
 	if (candidate.actionKind === "conditional_buy") {
+		debug("policy", "evaluateAction", "Evaluating conditional buy policy", {
+			actionKind: candidate.actionKind,
+		});
 		return evaluateConditionalBuy(input);
 	}
 
+	debug("policy", "evaluateAction", "Falling back to default policy decision", {
+		actionKind: candidate.actionKind,
+	});
 	return decision(
 		input,
 		policy.default,

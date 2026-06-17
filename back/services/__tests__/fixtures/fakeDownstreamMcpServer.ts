@@ -15,6 +15,7 @@ import type {
 	DownstreamMcpTool,
 	ProxiedMcpToolCall,
 } from "../../mcp/mcpProxyContracts";
+import { debug } from "../../guardrail/debugLogger";
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -269,7 +270,7 @@ export function createFakeDownstreamMcpServer(
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	startFakeDownstreamMcpServer().catch((error) => {
 		const message = error instanceof Error ? error.message : String(error);
-		console.error(`Fake downstream MCP server failed: ${message}`);
+		debug("connection", "handleFailure", "Fake downstream MCP server failed", { message });
 		process.exit(1);
 	});
 }

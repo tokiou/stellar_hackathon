@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { debug } from "../../guardrail/debugLogger";
 import { classifyToolCall, createActionCandidate } from "../../guardrail/execution/executionGateway";
 import { COMPASS_DECISIONS } from "../../guardrail/execution/executionGatewayContracts";
 import { loadDefaultPolicy } from "../../guardrail/policy/loadPolicy";
@@ -21,6 +22,11 @@ const SWAP_ACTION_KIND = "swap";
 export async function evaluateSwapGateway(
 	input: EvaluateSwapGatewayInput,
 ): Promise<SwapGatewayEvaluation> {
+	debug("gateway", "swap", "Evaluating swap gateway", {
+		inputToken: input.inputToken,
+		outputToken: input.outputToken,
+		inputAmount: input.inputAmount,
+	});
 	const policy = input.policy ?? loadDefaultPolicy();
 	const toolName = input.toolName ?? SWAP_ACTION_KIND;
 	const classification = classifyToolCall({ toolName, mutates: true });

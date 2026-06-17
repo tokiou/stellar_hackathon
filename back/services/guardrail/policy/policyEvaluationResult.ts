@@ -1,4 +1,5 @@
 import { COMPASS_DECISIONS } from "../../guardrail/execution/executionGatewayContracts";
+import { debug } from "../debugLogger";
 import {
 	POLICY_OUTCOMES,
 	type EvaluateActionInput,
@@ -26,6 +27,11 @@ export function policyResult(
 	reasonCodes: string[],
 	evaluatedRules: string[],
 ): PolicyEvaluation {
+	debug("policy", "applyDecision", "Policy decision applied", {
+		toolName: input.candidate.toolName,
+		decision: decisionValue as string,
+		evaluatedRules,
+	});
 	return {
 		decision: decisionValue,
 		policyId: input.policy.policy_id,
