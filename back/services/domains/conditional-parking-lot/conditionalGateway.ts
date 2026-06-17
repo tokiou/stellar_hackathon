@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { debug } from "../../guardrail/debugLogger";
 import { classifyToolCall, createActionCandidate } from "../../guardrail/execution/executionGateway";
 import { COMPASS_DECISIONS } from "../../guardrail/execution/executionGatewayContracts";
 import { loadDefaultPolicy } from "../../guardrail/policy/loadPolicy";
@@ -22,6 +23,11 @@ const CONDITIONAL_TOOL_NAME = "conditional_buy_sol";
 export async function evaluateConditionalGateway(
 	input: EvaluateConditionalGatewayInput,
 ): Promise<ConditionalGatewayEvaluation> {
+	debug("gateway", "conditional", "Evaluating conditional gateway", {
+		inputToken: input.inputToken,
+		inputAmountUsdc: input.inputAmountUsdc,
+		targetPriceUsd: input.targetPriceUsd,
+	});
 	const policy = input.policy ?? loadDefaultPolicy();
 	const toolName = input.toolName ?? CONDITIONAL_TOOL_NAME;
 	const classification = classifyToolCall({ toolName, mutates: true });

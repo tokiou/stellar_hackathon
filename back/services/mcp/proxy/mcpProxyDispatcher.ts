@@ -12,6 +12,7 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import { debug } from "../../guardrail/debugLogger";
 import { evaluateLlmMetadata, resolveLlmConfig } from "../../intelligence/llm-decision/llmDecisionAdapter";
 import { routeToolCall, resolveRouterConfig } from "../../intelligence/llm-router/llmRouterAdapter";
 import type {
@@ -124,6 +125,10 @@ export function createProxyDispatcher(
 				args.arguments,
 				policyOverride ? { policyDecision: policyOverride } : undefined,
 			);
+			debug("proxy", "callTool", "Policy evaluation result", {
+				tool: args.toolName,
+				outcome: evaluatedDecision.outcome,
+			});
 			let forwardingDecision = evaluatedDecision;
 
 			// 3. If policy requires approval but router is enabled, try LLM routing
@@ -139,6 +144,11 @@ export function createProxyDispatcher(
 					const routerResult = await routeToolCall(routerInput, routerConfig);
 					const routerClassification: ProxyRouterClassification =
 						routerResult.classification;
+					debug("proxy", "callTool", "Router classification", {
+						tool: args.toolName,
+						classification: routerClassification,
+						latencyMs: routerResult.latencyMs,
+					});
 					recordProxyAuditRouting({
 						toolName: args.toolName,
 						classification: routerClassification,
@@ -251,6 +261,10 @@ export function createProxyDispatcher(
 
 			// 4. If policy does not allow, do NOT forward — return policy outcome
 			if (forwardingDecision.outcome !== "allow") {
+				debug("proxy", "callTool", "Request denied by policy", {
+					tool: args.toolName,
+					outcome: forwardingDecision.outcome,
+				});
 				const decisionPrefix =
 					forwardingDecision.outcome === "deny" ? "denied" : "require_approval";
 				const denialReason = `${decisionPrefix}: ${forwardingDecision.reason}`;
@@ -297,6 +311,10 @@ export function createProxyDispatcher(
 			}
 
 			// 6. Forward allowed call to downstream
+			debug("proxy", "callTool", "Forwarding allowed call", {
+				tool: args.toolName,
+				outcome: forwardingDecision.outcome,
+			});
 			try {
 				const redactedArgs = redactSecretArguments(args.arguments);
 				void redactedArgs; // Available for future audit enrichment

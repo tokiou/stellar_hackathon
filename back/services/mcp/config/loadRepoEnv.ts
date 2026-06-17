@@ -17,6 +17,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { debug } from "../../guardrail/debugLogger";
+
 let loaded = false;
 
 /** Keys whose values should never be logged. */
@@ -142,7 +144,7 @@ export function loadRepoEnv(options?: { overrideRootDir?: string }): {
 		const safeKeys = keysLoaded.map((k) =>
 			isSecretKey(k) ? `${k}=***` : k,
 		);
-		console.error(`[compass:env] Loaded ${keysLoaded.length} variable(s) from .env: ${safeKeys.join(", ")}`);
+		debug("connection", "loadEnv", "Loaded variables from .env", { keys: safeKeys });
 	}
 
 	loaded = true;

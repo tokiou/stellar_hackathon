@@ -6,6 +6,7 @@
  */
 
 import { Connection, ConnectionConfig } from '@solana/web3.js';
+import { debug } from '../../guardrail/debugLogger';
 
 const RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 
@@ -29,7 +30,7 @@ const MIN_REQUEST_INTERVAL_MS = 100; // Minimum 100ms between requests
  */
 export function getConnection(): Connection {
   if (!sharedConnection) {
-    console.log(`[solanaConnection] Creating shared connection to ${RPC_URL}`);
+    debug("connection", "createConnection", "Creating shared connection", { url: RPC_URL });
     sharedConnection = new Connection(RPC_URL, CONNECTION_CONFIG);
   }
   return sharedConnection;

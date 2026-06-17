@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { debug } from "../../guardrail/debugLogger";
 import {
 	buildAuditEvent,
 	classifyToolCall,
@@ -32,6 +33,10 @@ const TRANSFER_ACTION_KIND = "transfer";
 export async function evaluateTransferGateway(
 	input: EvaluateTransferGatewayInput,
 ): Promise<TransferGatewayEvaluation> {
+	debug("gateway", "transfer", "Evaluating transfer gateway", {
+		amountSol: input.amountSol,
+		recipient: input.recipientAddress,
+	});
 	const policy = input.policy ?? loadDefaultPolicy();
 	const toolName = input.toolName ?? "transfer";
 	const classification = classifyToolCall({ toolName, mutates: true });

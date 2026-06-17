@@ -21,6 +21,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { createDownstreamStdioMcpClient } from "../proxy/downstreamMcpStdioClient";
+import { debug } from "../../guardrail/debugLogger";
 import { loadRepoEnv } from "../config/loadRepoEnv";
 import type {
 	DownstreamMcpClient,
@@ -213,7 +214,7 @@ if (isDirectExecution()) {
 	loadRepoEnv();
 	startCompassMcpStdioServer().catch((error) => {
 		const message = error instanceof Error ? error.message : String(error);
-		console.error(`Compass MCP stdio server failed to start: ${message}`);
+		debug("gateway", "startServer", "Compass MCP stdio server failed to start", { message });
 		process.exit(1);
 	});
 }

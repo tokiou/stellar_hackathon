@@ -9,6 +9,7 @@
  */
 
 import type { ProxyDecision } from "./mcpProxyContracts";
+import { debug } from "../../guardrail/debugLogger";
 
 // ---------------------------------------------------------------------------
 // Risk classification for arbitrary downstream tools
@@ -148,44 +149,51 @@ export function classifyProxyToolCall(toolName: string): ProxyRiskClass {
 	const normalizedToolName = normalizeToolName(toolName);
 	const tokens = tokenizeToolName(toolName);
 
-	// UI/bootstrap operations — intentionally exact to avoid allowing financial
-	// actions such as open_position through broad verb matching.
-	if (
-		normalizedToolName === "show_wallet_app" ||
-		normalizedToolName === "compass_show_wallet_app"
-	) {
-		return "ui_bootstrap";
-	}
+// UI/bootstrap operations — intentionally exact to avoid allowing financial
+  // actions such as open_position through broad verb matching.
+  if (
+    normalizedToolName === "show_wallet_app" ||
+    normalizedToolName === "compass_show_wallet_app"
+  ) {
+    debug("interceptor", "classify", "Classified as ui_bootstrap", { toolName });
+    return "ui_bootstrap";
+  }
 
-	if (hasSigningToolPattern(normalizedToolName, tokens)) {
-		return "signing";
-	}
+  if (hasSigningToolPattern(normalizedToolName, tokens)) {
+    debug("interceptor", "classify", "Classified as signing", { toolName });
+    return "signing";
+  }
 
-	if (hasAnyToken(tokens, SENSITIVE_EXECUTION_TOKENS)) {
-		return "sensitive_execution";
-	}
+  if (hasAnyToken(tokens, SENSITIVE_EXECUTION_TOKENS)) {
+    debug("interceptor", "classify", "Classified as sensitive_execution", { toolName });
+    return "sensitive_execution";
+  }
 
-	// Routable mutations: financial actions that should go to the LLM Router
-	// for context-aware classification (transfer vs swap vs skip vs unknown).
-	if (hasAnyToken(tokens, ROUTABLE_MUTATION_TOKENS)) {
-		return "routable_mutation";
-	}
+  // Routable mutations: financial actions that should go to the LLM Router
+  // for context-aware classification (transfer vs swap vs skip vs unknown).
+  if (hasAnyToken(tokens, ROUTABLE_MUTATION_TOKENS)) {
+    debug("interceptor", "classify", "Classified as routable_mutation", { toolName });
+    return "routable_mutation";
+  }
 
-	if (
-		(tokens.some((t) => READ_ONLY_VERBS.has(t))) &&
-		!hasAnyToken(tokens, AMBIGUOUS_MUTATION_TOKENS)
-	) {
-		return "read_only";
-	}
+  if (
+    (tokens.some((t) => READ_ONLY_VERBS.has(t))) &&
+    !hasAnyToken(tokens, AMBIGUOUS_MUTATION_TOKENS)
+  ) {
+    debug("interceptor", "classify", "Classified as read_only", { toolName });
+    return "read_only";
+  }
 
-	if (
-		(tokens.some((t) => PREPARATION_SIMULATION_VERBS.has(t))) &&
-		!hasAnyToken(tokens, AMBIGUOUS_MUTATION_TOKENS)
-	) {
-		return "preparation_simulation";
-	}
+  if (
+    (tokens.some((t) => PREPARATION_SIMULATION_VERBS.has(t))) &&
+    !hasAnyToken(tokens, AMBIGUOUS_MUTATION_TOKENS)
+  ) {
+    debug("interceptor", "classify", "Classified as preparation_simulation", { toolName });
+    return "preparation_simulation";
+  }
 
-	return "unknown";
+  debug("interceptor", "classify", "Classified as unknown", { toolName });
+  return "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +234,10 @@ export function evaluateProxyToolCallPolicy(
 	}
 
 	const riskClass = classifyProxyToolCall(toolName);
+	debug("interceptor", "evaluate", "Interceptor decision", {
+		toolName,
+		riskClass,
+	});
 
 	switch (riskClass) {
 		case "read_only":
