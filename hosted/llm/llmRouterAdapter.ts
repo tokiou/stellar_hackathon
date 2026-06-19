@@ -12,7 +12,7 @@ import {
 import {
 	LLM_ROUTER_SYSTEM_PROMPT,
 	LLM_ROUTER_USER_PROMPT_TEMPLATE,
-} from "@back/intelligence/llm-router/llmRouterPrompt";
+} from "./llmRouterPrompt";
 
 type LlmRouterProviderConfig = LlmRouterConfig & {
 	baseUrl?: string;
