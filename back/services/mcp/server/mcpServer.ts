@@ -8,6 +8,8 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { hostname } from "node:os";
+import { createHash } from "node:crypto";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getPostHogClient, getInstallationDistinctId } from "@back/posthog/posthogClient";
@@ -218,10 +220,18 @@ function buildProxyMcpToolError(
 	};
 }
 
+// ponytail: stable local installation ID derived from hostname + cwd
+function resolveLocalInstallationId(): string {
+	const raw = `${hostname()}:${process.cwd()}`;
+	return `local_${createHash("sha256").update(raw).digest("hex").slice(0, 16)}`;
+}
+
 export async function startCompassMcpStdioServer(): Promise<void> {
 	const config = parseDownstreamMcpRuntimeConfig();
 	const downstream = createRuntimeDownstreamClient(config);
 	const hostedConfig = readHostedBackendEnvConfig();
+	const installationId =
+		hostedConfig.installationId ?? resolveLocalInstallationId();
 	const hostedClient =
 		hostedConfig.apiUrl && hostedConfig.apiKey
 			? createMcpHostedClient({
@@ -230,7 +240,7 @@ export async function startCompassMcpStdioServer(): Promise<void> {
 					timeoutMs: hostedConfig.timeoutMs,
 			  })
 			: undefined;
-	const sessionId = `session_${randomUUID()}`;
+		const sessionId = `session_${randomUUID()}`;
 	try {
 		await downstream.start?.();
 		const server = createProxyMcpServer({
@@ -239,14 +249,14 @@ export async function startCompassMcpStdioServer(): Promise<void> {
 			hybridGuardEnabled: hostedConfig.hybridGuardEnabled,
 			executeTool: async (args) =>
 				(await downstream.callTool(args)) as CallToolResult,
-			installationId: hostedConfig.installationId,
+			installationId,
 			sessionId,
 		});
 		const transport = new StdioServerTransport();
 		await server.connect(transport);
 
 		getPostHogClient().capture({
-			distinctId: hostedConfig.installationId ?? getInstallationDistinctId(),
+			distinctId: installationId,
 			event: "mcp_session_started",
 			properties: {
 				session_id: sessionId,
