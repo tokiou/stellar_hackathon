@@ -9,6 +9,7 @@
 
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { redactRecord } from "./redaction";
 
 // ─── Types ──
 
@@ -93,34 +94,4 @@ function ensureLogDir(): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-}
-
-// ─── Sensitive key redaction (self-contained, mirrors executionGateway) ──
-
-const SENSITIVE_KEY_PATTERN =
-  /(private.*key|secret|password|mnemonic|seed|api.*key|authorization|cookie|jwt|session.*token|auth.*token|access.*token|refresh.*token|prompt|raw.*prompt|raw.*user.*prompt)/i;
-
-function redactRecord(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(record).map(([key, value]) => [key, redactValue(key, value)]),
-  );
-}
-
-function redactValue(key: string, value: unknown): unknown {
-  if (SENSITIVE_KEY_PATTERN.test(key)) return "[REDACTED]";
-  if (Array.isArray(value)) return value.map((item) => redactUnknown(item));
-  if (isPlainRecord(value)) return redactRecord(value);
-  return value;
-}
-
-function redactUnknown(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => redactUnknown(item));
-  if (isPlainRecord(value)) return redactRecord(value);
-  return value;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
