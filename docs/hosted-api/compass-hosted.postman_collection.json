@@ -6,7 +6,8 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3001" },
-    { "key": "apiKey", "value": "" }
+    { "key": "apiKey", "value": "" },
+    { "key": "invalidApiKey", "value": "" }
   ],
   "item": [
     {
@@ -90,7 +91,7 @@
             "method": "POST",
             "url": { "raw": "{{baseUrl}}/v1/evaluate", "host": ["{{baseUrl}}"], "path": ["v1", "evaluate"] },
             "header": [
-              { "key": "Authorization", "value": "Bearer wrong-key-12345" },
+              { "key": "Authorization", "value": "Bearer {{invalidApiKey}}" },
               { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
