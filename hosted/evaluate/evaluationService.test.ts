@@ -87,12 +87,74 @@ describe("createEvaluationService", () => {
 		expect(deps.writeAudit).toHaveBeenCalledTimes(1);
 	});
 
-	it("denies unknown classifications fail-closed", async () => {
+	it("passes unknown classifications to the LLM judge for decision", async () => {
 		const deps = createDependencies({
 			routeToolCall: vi.fn().mockResolvedValue({
 				classification: "unknown",
 				reasoning: "Could not classify.",
 				latencyMs: 8,
+			}),
+			callLlmJudge: vi.fn().mockResolvedValue({
+				decision: LLM_GUARD_DECISIONS.REQUIRE_HUMAN_APPROVAL,
+				confidence: 0.6,
+				reasonCodes: ["LLM_UNKNOWN_TOOL_ESCALATED"],
+				rationale: "Cannot determine intent with certainty.",
+			}),
+		});
+		const service = createEvaluationService(deps);
+
+		const response = await service.evaluateAction(createRequest());
+
+		expect(response).toMatchObject({
+			decision: "confirm",
+			riskLevel: "medium",
+			auditRef: "aud_test_1",
+		});
+		expect(response.reasons).toContain("ROUTER_UNKNOWN");
+		expect(response.reasons).toContain("LLM_UNKNOWN_TOOL_ESCALATED");
+		expect(deps.callLlmJudge).toHaveBeenCalledTimes(1);
+		expect(deps.evaluatePolicy).not.toHaveBeenCalled();
+	});
+
+	it("allows unknown when LLM judge determines it is safe", async () => {
+		const deps = createDependencies({
+			routeToolCall: vi.fn().mockResolvedValue({
+				classification: "unknown",
+				reasoning: "Could not classify.",
+				latencyMs: 8,
+			}),
+			callLlmJudge: vi.fn().mockResolvedValue({
+				decision: LLM_GUARD_DECISIONS.ALLOW,
+				confidence: 0.85,
+				reasonCodes: ["LLM_ALLOW"],
+				rationale: "Tool appears safe.",
+			}),
+		});
+		const service = createEvaluationService(deps);
+
+		const response = await service.evaluateAction(createRequest());
+
+		expect(response).toMatchObject({
+			decision: "allow",
+			riskLevel: "low",
+			auditRef: "aud_test_1",
+		});
+		expect(response.reasons).toContain("ROUTER_UNKNOWN");
+		expect(response.reasons).toContain("LLM_ALLOW");
+	});
+
+	it("denies unknown when LLM judge determines it is dangerous", async () => {
+		const deps = createDependencies({
+			routeToolCall: vi.fn().mockResolvedValue({
+				classification: "unknown",
+				reasoning: "Could not classify.",
+				latencyMs: 8,
+			}),
+			callLlmJudge: vi.fn().mockResolvedValue({
+				decision: LLM_GUARD_DECISIONS.DENY,
+				confidence: 0.95,
+				reasonCodes: ["LLM_DENY"],
+				rationale: "Potentially dangerous.",
 			}),
 		});
 		const service = createEvaluationService(deps);
@@ -101,11 +163,11 @@ describe("createEvaluationService", () => {
 
 		expect(response).toMatchObject({
 			decision: "deny",
-			riskLevel: "unknown",
+			riskLevel: "medium",
 			auditRef: "aud_test_1",
 		});
-		expect(response.reasons).toContain("ROUTER_UNKNOWN_DENY");
-		expect(deps.evaluatePolicy).not.toHaveBeenCalled();
+		expect(response.reasons).toContain("ROUTER_UNKNOWN");
+		expect(response.reasons).toContain("LLM_DENY");
 	});
 
 	it("applies policy and lets the LLM tighten an allowed transfer into confirm", async () => {

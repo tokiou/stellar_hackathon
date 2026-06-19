@@ -15,7 +15,10 @@
     "mcp:dev": "tsx back/services/mcp/server/mcpServer.ts",
     "mcp:install:opencode": "node scripts/install-opencode-mcp.mjs",
     "test:e2e": "node scripts/e2e-pipeline-test.mjs",
-    "test:e2e:verbose": "node scripts/e2e-pipeline-test.mjs --verbose"
+    "test:e2e:verbose": "node scripts/e2e-pipeline-test.mjs --verbose",
+    "ticket:process": "tsx scripts/ticket-orchestrator.ts process",
+    "ticket:approve": "tsx scripts/ticket-orchestrator.ts approve",
+    "ticket:status": "tsx scripts/ticket-orchestrator.ts status"
   },
   "dependencies": {
     "@coral-xyz/anchor": "~0.32.1",
@@ -37,6 +40,7 @@
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "globals": "^15.9.0",
+    "gray-matter": "^4.0.3",
     "sharp": "^0.34.5",
     "tsx": "^4.22.4",
     "typescript": "^5.5.3",

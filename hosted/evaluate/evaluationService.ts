@@ -71,31 +71,17 @@ export function createEvaluationService(
 				deps: resolvedDeps,
 			});
 
+			let finalResponse: EvaluateActionResponse;
 			try {
 				const auditWrite = await resolvedDeps.writeAudit(
 					buildAuditWriteRequest(request, preliminaryResponse),
 				);
 
-				const finalResponse = {
+				finalResponse = {
 					...preliminaryResponse,
 					correlationId: auditWrite.correlationId,
 					auditRef: auditWrite.auditRef,
 				};
-
-				getPostHogClient().capture({
-					distinctId: request.userId ?? getInstallationDistinctId(),
-					event: "hosted_action_evaluated",
-					properties: {
-						tool_name: request.toolName,
-						decision: finalResponse.decision,
-						risk_level: finalResponse.riskLevel,
-						reasons: finalResponse.reasons,
-						correlation_id: finalResponse.correlationId,
-						session_id: request.sessionId,
-					},
-				});
-
-				return finalResponse;
 			} catch {
 				getPostHogClient().captureException(
 					new Error("Audit write failed; returning degraded denial."),
@@ -108,6 +94,25 @@ export function createEvaluationService(
 					correlationId: request.correlationId,
 				};
 			}
+
+			try {
+				getPostHogClient().capture({
+					distinctId: request.userId ?? getInstallationDistinctId(),
+					event: "hosted_action_evaluated",
+					properties: {
+						tool_name: request.toolName,
+						decision: finalResponse.decision,
+						risk_level: finalResponse.riskLevel,
+						reasons: finalResponse.reasons,
+						correlation_id: finalResponse.correlationId,
+						session_id: request.sessionId,
+					},
+				});
+			} catch {
+				// ponytail: telemetry failure must not block evaluation
+			}
+
+			return finalResponse;
 		},
 	};
 }
@@ -130,12 +135,37 @@ async function buildDecisionResponse(input: {
 	}
 
 	if (routerResult.classification === "unknown") {
+		// unknown → LLM judge decides (fail-closed only if LLM is unavailable)
+		const llmDecision = await deps.callLlmJudge(
+			sanitizeLlmJudgeInput({
+				toolName: request.toolName,
+				actionKind: "unknown",
+				network: "solana",
+				deterministicDecision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+				riskClass: "unknown",
+				reasonCodes: ["ROUTER_UNKNOWN"],
+				rawContext: request.arguments,
+			}),
+			resolveLlmConfig(),
+		);
+
+		const decision = llmDecision?.decision === "ALLOW"
+			? "allow"
+			: llmDecision?.decision === "DENY"
+				? "deny"
+				: "confirm";
+
 		return {
 			correlationId: request.correlationId,
-			decision: "deny",
-			riskLevel: HOSTED_RISK_LEVELS.UNKNOWN,
-			reasons: ["ROUTER_UNKNOWN_DENY"],
-			suggestedAction: "Review the tool classification before retrying.",
+			decision,
+			riskLevel: decision === "allow" ? HOSTED_RISK_LEVELS.LOW : HOSTED_RISK_LEVELS.MEDIUM,
+			reasons: [
+				"ROUTER_UNKNOWN",
+				...(llmDecision?.reasonCodes ?? []),
+			],
+			suggestedAction: decision === "confirm"
+				? "LLM judge could not classify with certainty; request user confirmation."
+				: undefined,
 			auditRef: "pending-audit",
 		};
 	}
