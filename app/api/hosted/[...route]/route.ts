@@ -50,18 +50,6 @@ export async function HEAD(request: Request) {
 
 async function handleRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
-
-	// DEBUG: temporary endpoint to verify env var reaches the function
-	const route = url.pathname.replace("/api/hosted/", "");
-	if (route === "__debug-env") {
-		const raw = getEnv("COMPASS_HOSTED_API_KEY");
-		return Response.json({
-			hasKey: !!raw,
-			keyLength: raw?.length ?? 0,
-			first4: raw?.slice(0, 4) ?? null,
-		});
-	}
-
 	url.pathname = stripHostedPrefix(url.pathname);
 
 	return getApp().fetch(
