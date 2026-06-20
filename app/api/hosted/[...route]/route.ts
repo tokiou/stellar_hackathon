@@ -1,16 +1,31 @@
 import {
-	createDefaultHostedAppDependencies,
 	createHostedApp,
 } from "@hosted/app";
 import type { Hono } from "hono";
 
 const HOSTED_PREFIX = "/api/hosted";
 
+// ponytail: bracket notation prevents Next.js webpack from inlining
+// process.env at build time. This MUST be evaluated at runtime.
+function readApiKey(): string | undefined {
+	const key = process.env["COMPASS_HOSTED_API_KEY"];
+	return key && key.trim().length > 0 ? key.trim() : undefined;
+}
+
 // ponytail: lazy-init so process.env is read at request time, not build time
 let cachedApp: Hono | undefined;
 function getApp(): Hono {
 	if (!cachedApp) {
-		cachedApp = createHostedApp(createDefaultHostedAppDependencies());
+		cachedApp = createHostedApp({
+			auth: { apiKey: readApiKey() },
+			health: {
+				dependencies: {
+					auditStore: "ok",
+					policy: "ok",
+					llm: "ok",
+				},
+			},
+		});
 	}
 	return cachedApp;
 }
