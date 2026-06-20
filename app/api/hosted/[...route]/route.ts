@@ -1,12 +1,19 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-
 import {
 	createDefaultHostedAppDependencies,
 	createHostedApp,
 } from "@hosted/app";
+import type { Hono } from "hono";
 
-const app = createHostedApp(createDefaultHostedAppDependencies());
 const HOSTED_PREFIX = "/api/hosted";
+
+// ponytail: lazy-init so process.env is read at request time, not build time
+let cachedApp: Hono | undefined;
+function getApp(): Hono {
+	if (!cachedApp) {
+		cachedApp = createHostedApp(createDefaultHostedAppDependencies());
+	}
+	return cachedApp;
+}
 
 export async function GET(request: Request) {
 	return handleRequest(request);
@@ -34,7 +41,7 @@ async function handleRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
 	url.pathname = stripHostedPrefix(url.pathname);
 
-	return app.fetch(
+	return getApp().fetch(
 		new Request(url, {
 			method: request.method,
 			headers: request.headers,
