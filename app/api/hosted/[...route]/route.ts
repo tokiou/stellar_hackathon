@@ -5,19 +5,15 @@ import type { Hono } from "hono";
 
 const HOSTED_PREFIX = "/api/hosted";
 
-// ponytail: bracket notation prevents Next.js webpack from inlining
-// process.env at build time. This MUST be evaluated at runtime.
-function readApiKey(): string | undefined {
-	const key = process.env["COMPASS_HOSTED_API_KEY"];
-	return key && key.trim().length > 0 ? key.trim() : undefined;
-}
+// ponytail: webpack inlines process.env.X at build time. Using Function
+// constructor to bypass static analysis so the env var is read at runtime.
+const getEnv = new Function("key", "return process.env[key]") as (key: string) => string | undefined;
 
-// ponytail: lazy-init so process.env is read at request time, not build time
 let cachedApp: Hono | undefined;
 function getApp(): Hono {
 	if (!cachedApp) {
 		cachedApp = createHostedApp({
-			auth: { apiKey: readApiKey() },
+			auth: { apiKey: getEnv("COMPASS_HOSTED_API_KEY")?.trim() || undefined },
 			health: {
 				dependencies: {
 					auditStore: "ok",
