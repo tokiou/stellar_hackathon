@@ -94,6 +94,11 @@ Workstreams are largely independent — parallelize. The judge workstream lands 
 ## Judge handoff contract
 
 The clean interface so the two workstreams compose without stepping on each other.
+The judge workstream — un-blinding the judge to the real tx (decode + simulate, intent-vs-mandate) — is
+spec'd in [`docs/judge-unblinding/`](../judge-unblinding/proposal.md)
+([technical detail](../judge-unblinding/technical-spec.md)). **It is demo-day-critical**: the headline
+mandate-stop below is impossible without it, so the two workstreams share the mid-July deadline, not just the
+interface.
 
 **This plan provides TO the judge workstream:**
 - The **durable verdict-store schema** (WS2) the judge writes into: `{tool, amount, recipient, mandate/intent, decision, risk, reasons[], human_explanation, timestamp, correlationId}`.
