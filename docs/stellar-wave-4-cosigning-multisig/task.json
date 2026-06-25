@@ -1,0 +1,147 @@
+{
+  "id": "stellar-wave-4-cosigning-multisig",
+  "title": "Stellar Wave 4 — Co-signing and multisig",
+  "status": "planned",
+  "branch": "feature/stellar-wave-4-cosigning-multisig",
+  "baseBranch": "main",
+  "goal": "Make Compass a policy-gated co-signer for Stellar. Add a multi-signer-aware co-signing contract that generalizes the single-signer SignerAdapter (NOT typed on VersionedTransaction; operates on a base64 TransactionEnvelope XDR string), and a Stellar co-signer implementing Wave 0's ChainAdapter.cosign + inspectAccount. Compass holds its OWN testnet keypair (additional signer, never the user's key), adds ONLY its signature on the brain's ALLOW, binds the envelope to the evaluated candidate, reads real signers/weights/thresholds from Horizon, and never submits. On DENY/ESCALATE Compass does not sign, so the account threshold is unmet and the network rejects the transaction. The brain stays untouched and the Solana single-signer path stays green. Testnet-only.",
+  "dependsOn": [
+    "stellar-wave-0-chain-adapter-boundary",
+    "stellar-wave-1-stellar-connectivity",
+    "stellar-wave-2-xdr-decoder",
+    "stellar-wave-3-operation-mapping"
+  ],
+  "context": {
+    "analysisSource": "docs/PRODUCT_CONSTITUTION.md",
+    "precedent": "docs/wave-6-signer-adapter/",
+    "relatedCode": [
+      "back/services/support/signer/signerAdapterContracts.ts",
+      "back/services/support/signer/signerAdapter.ts",
+      "shared/types/chainContracts.ts",
+      "shared/types/executionGatewayContracts.ts",
+      "back/solana/agent-action-guard"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "Does Compass sign server-side with its own key, or return an unsigned-by-Compass envelope plus a signing intent for some external signer?",
+      "resolution": "DECIDED: Compass signs with its OWN Stellar testnet key server-side, because Compass IS one of the account's required signers. cosign returns the envelope augmented with only Compass's signature; it never submits. Compass never holds or uses the user's key. The keypair is loaded only behind COMPASS_STELLAR_SIGNER_ENABLED=true and is testnet-only."
+    },
+    {
+      "id": "Q2",
+      "question": "How is the account's multisig configured for the demo so that Compass's signature is required to meet the threshold?",
+      "resolution": "DECIDED: Pre-set the account so the user's master weight plus Compass's signer key sum to the medium/high threshold, meaning neither alone meets it. Wave 4 only READS and verifies this via inspectAccount; the actual account setup (setOptions to add Compass as a signer and tune thresholds) is detailed and owned by Wave 6. Wave 4 depends on that configuration but does not perform it."
+    },
+    {
+      "id": "Q3",
+      "question": "What exactly is hashed for the envelope<->candidate binding so Compass cannot be tricked into signing a different tx than the one it evaluated?",
+      "resolution": "DECIDED: A SHA-256 over the canonical, deterministic representation of the envelope's operations plus source account and sequence (the signature-base material the brain evaluated in Waves 2-3). cosign recomputes this fingerprint from the supplied envelope and refuses (ENVELOPE_CANDIDATE_MISMATCH) unless it equals candidate.fingerprint. This closes the in-signer binding gap that the existing Solana flow leaves open."
+    }
+  ],
+  "acceptanceCriteria": [
+    "Compass adds ONLY its own signature to the envelope; it never signs with or holds the user's key.",
+    "Compass never submits the transaction unilaterally; cosign returns the augmented XDR and stops.",
+    "cosign is gated on the brain's ALLOW; on DENY or unresolved REQUIRE_HUMAN_APPROVAL it returns POLICY_NOT_ALLOWED and adds no signature.",
+    "inspectAccount reads real signers, weights, and low/med/high thresholds from Horizon.",
+    "Envelope-to-candidate binding is enforced: the envelope fingerprint must equal candidate.fingerprint or cosign returns ENVELOPE_CANDIDATE_MISMATCH and signs nothing.",
+    "With Compass's signature absent, the account threshold is unmet, verified against the inspected account configuration.",
+    "The co-signing contract operates on a base64 TransactionEnvelope XDR string and is NOT typed on VersionedTransaction.",
+    "Compass's signer is testnet-only behind COMPASS_STELLAR_SIGNER_ENABLED; mainnet returns COMPASS_SIGNER_MAINNET_FORBIDDEN.",
+    "Missing Compass signer configuration returns COMPASS_SIGNER_NOT_CONFIGURED.",
+    "The secret seed never appears in results, audit metadata, or logs.",
+    "The brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS, MCP proxy) is untouched and the Solana single-signer signing path stays green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No production custody of any private key.",
+    "No mainnet support of any kind.",
+    "No submitting on the user's behalf by default (the user or the network submits).",
+    "No automated keeper or background execution engine.",
+    "No change to the brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS, MCP proxy).",
+    "No change to any Solana provider or Solana signing behavior.",
+    "No multisig account setup (setOptions/threshold tuning) — that is owned by Wave 6.",
+    "No Soroban contract-invocation co-signing.",
+    "No legacy/ imports."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false"
+  ],
+  "tasks": [
+    {
+      "id": "T1_RED_COSIGN_CONTRACT",
+      "title": "Add RED tests for the Stellar co-signing contract",
+      "status": "pending",
+      "description": "Write failing tests asserting the multi-signer-aware CosignAdapter contract shape: it operates on a base64 EnvelopeXdr string (not VersionedTransaction), exposes getAddress, cosign, and inspectAccount, and exports the CosignResult refusal union. Assert no legacy/ import appears in any new Wave 4 file.",
+      "testsSpec": [
+        "A class implementing getAddress + cosign + inspectAccount satisfies CosignAdapter and compiles",
+        "cosign signature accepts (envelopeXdr: string, candidate, decision) and returns CosignResult",
+        "CosignResult refusal reasons include POLICY_NOT_ALLOWED, ENVELOPE_CANDIDATE_MISMATCH, COMPASS_SIGNER_NOT_CONFIGURED, COMPASS_SIGNER_MAINNET_FORBIDDEN",
+        "The contract does not import or reference @solana/web3.js VersionedTransaction",
+        "No legacy/ import appears in any new Wave 4 file"
+      ]
+    },
+    {
+      "id": "T2_GREEN_COSIGN_CONTRACT",
+      "title": "Implement stellarCosignerContracts.ts",
+      "status": "pending",
+      "description": "Create the multi-signer-aware contract that generalizes the single-signer SignerAdapter: EnvelopeXdr (base64 string), CosignCandidate (candidateId + fingerprint), CosignConfig, CosignResult discriminated union, and the CosignAdapter interface. Reuse CompassDecision from shared contracts and AccountSignerState from Wave 0. Keep types separate from behavior; introduce no new decision types.",
+      "filesPlanned": [
+        "back/services/stellar/signer/stellarCosignerContracts.ts"
+      ]
+    },
+    {
+      "id": "T3_RED_COSIGN_BEHAVIOR",
+      "title": "Add RED tests for cosign gating, binding, and testnet guard",
+      "status": "pending",
+      "description": "Write failing tests for the Stellar co-signer: ALLOW adds only Compass's signature and preserves the user's, DENY/ESCALATE refuse with POLICY_NOT_ALLOWED, fingerprint mismatch refuses with ENVELOPE_CANDIDATE_MISMATCH, cosign never submits, env-gate and mainnet guard, and seed non-exposure.",
+      "testsSpec": [
+        "cosign with decision ALLOW and matching fingerprint returns ok:true with exactly one added (Compass) signature, user signature preserved",
+        "cosign with decision DENY returns ok:false POLICY_NOT_ALLOWED and adds no signature",
+        "cosign with unresolved REQUIRE_HUMAN_APPROVAL returns POLICY_NOT_ALLOWED",
+        "cosign with a non-matching envelope fingerprint returns ENVELOPE_CANDIDATE_MISMATCH and signs nothing",
+        "cosign never invokes any submit/send path (no Horizon submit call)",
+        "COMPASS_STELLAR_SIGNER_ENABLED unset -> COMPASS_SIGNER_NOT_CONFIGURED",
+        "mainnet network passphrase / Horizon target -> COMPASS_SIGNER_MAINNET_FORBIDDEN",
+        "the secret seed never appears in results, audit metadata, or logs"
+      ]
+    },
+    {
+      "id": "T4_GREEN_COSIGN_BEHAVIOR",
+      "title": "Implement stellarCosigner.ts (cosign + inspectAccount)",
+      "status": "pending",
+      "description": "Create the Stellar co-signer implementing Wave 0's ChainAdapter.cosign and inspectAccount. cosign: env/network guard, decode envelope (Wave 2), compute fingerprint and bind to candidate, gate on ALLOW, add ONLY Compass's testnet signature, return augmented base64 XDR, never submit. inspectAccount: read signers/weights/low-med-high thresholds from Horizon (Wave 1) into AccountSignerState. Compass keypair behind COMPASS_STELLAR_SIGNER_ENABLED, testnet-only.",
+      "filesPlanned": [
+        "back/services/stellar/signer/stellarCosigner.ts",
+        "back/services/stellar/signer/__tests__/stellarCosigner.test.ts"
+      ]
+    },
+    {
+      "id": "T5_RED_INSPECT_ACCOUNT",
+      "title": "Add RED tests for inspectAccount multisig read",
+      "status": "pending",
+      "description": "Write failing tests asserting inspectAccount maps Horizon signers/weights/thresholds into AccountSignerState and that, given the demo configuration, the threshold is unmet without Compass's weight.",
+      "testsSpec": [
+        "inspectAccount maps Horizon signers (key + weight) into AccountSignerState",
+        "inspectAccount maps low_threshold / med_threshold / high_threshold into AccountSignerState thresholds",
+        "given user master weight + Compass weight summing to the threshold, removing Compass's weight leaves the threshold unmet",
+        "inspectAccount performs no signing and no submission"
+      ]
+    },
+    {
+      "id": "T6_VALIDATE",
+      "title": "Validate Wave 4 and pause for review",
+      "status": "pending",
+      "description": "Run the full validation suite and confirm the brain is untouched, the Solana single-signer path stays green, and everything is testnet-only before review.",
+      "validationCommands": [
+        "npm run test:back",
+        "npm run lint",
+        "npx tsc --noEmit --pretty false"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}

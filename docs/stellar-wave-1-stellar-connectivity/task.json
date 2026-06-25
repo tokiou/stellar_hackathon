@@ -1,0 +1,163 @@
+{
+  "id": "stellar-wave-1-stellar-connectivity",
+  "title": "Stellar Wave 1 — Stellar Testnet connectivity",
+  "status": "planned",
+  "branch": "feature/stellar-wave-1-stellar-connectivity",
+  "baseBranch": "main",
+  "goal": "Stand up Stellar Testnet connectivity as a parallel 'body' for Compass, analogous to the existing Solana providers: a fail-safe testnet-only network config module, a Horizon + Soroban connection module, and a Friendbot funding helper. Pure connectivity/infra with no policy logic. The brain stays untouched and Solana keeps working unchanged in parallel.",
+  "dependsOn": [
+    "stellar-wave-0-chain-adapter-boundary"
+  ],
+  "context": {
+    "analysisSource": "docs/stellar-wave-1-stellar-connectivity/functional-spec.md and technical-spec.md",
+    "precedent": "back/services/solana/providers/ (solanaNetworkConfig.ts devnet-only guard, solanaConnection.ts singleton client construction)",
+    "relatedCode": [
+      "back/services/solana/providers/solanaNetworkConfig.ts",
+      "back/services/solana/providers/solanaConnection.ts",
+      ".env.example"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "Horizon vs Soroban RPC — which is primary for account-state reads in the co-signer flow? Classic Stellar multisig (signers + thresholds) lives in Horizon; Soroban is for smart-contract calls.",
+      "resolution": "DECIDED: Horizon is primary for classic multisig account-state reads (balances, signers, thresholds). Soroban RPC is constructed alongside it but reserved for smart-contract calls in later waves. stellarConnection exposes both clients."
+    },
+    {
+      "id": "Q2",
+      "question": "Should Friendbot funding be a test-only helper or also a demo script entrypoint?",
+      "resolution": "DECIDED: Implement fundTestnetAccount as a shared helper in friendbot.ts, usable by both backend tests and the Wave 6 demo script. No separate test-only copy."
+    }
+  ],
+  "acceptanceCriteria": [
+    "stellarNetworkConfig.ts validates all five STELLAR_* vars: STELLAR_NETWORK, STELLAR_NETWORK_PASSPHRASE, STELLAR_HORIZON_URL, STELLAR_RPC_URL, STELLAR_FRIENDBOT_URL.",
+    "The config module accepts only STELLAR_NETWORK=testnet with the testnet passphrase 'Test SDF Network ; September 2015' and rejects any mainnet passphrase with a coded error.",
+    "The testnet-only guard mirrors the Solana devnet-only guard in solanaNetworkConfig.ts and never silently defaults to mainnet.",
+    "stellarConnection.ts exposes a Horizon Server client and a Soroban RPC client constructed from validated config.",
+    "friendbot.ts funds a fresh testnet account and the account subsequently reports a positive XLM balance.",
+    ".env.example documents the five STELLAR_* vars verbatim next to the SOLANA_* block.",
+    "@stellar/stellar-sdk is added as a dependency.",
+    "The brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS contract, MCP proxy) is untouched and Solana behavior is unchanged.",
+    "Existing Solana tests stay green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No policy logic, scoring, or decisioning in this wave.",
+    "No changes to the policy engine, LLM judge, sanitizer, COMPASS_DECISIONS contract, or MCP proxy.",
+    "No changes to any Solana provider or Solana behavior.",
+    "No classic multisig threshold/co-signer evaluation (Wave 6).",
+    "No Soroban contract invocation or transaction submission.",
+    "No mainnet support of any kind.",
+    "No legacy/ imports."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false"
+  ],
+  "tasks": [
+    {
+      "id": "T1_ADD_STELLAR_SDK_DEP",
+      "title": "Add @stellar/stellar-sdk dependency",
+      "status": "pending",
+      "description": "Add @stellar/stellar-sdk to package.json dependencies so Horizon and Soroban RPC clients can be constructed. No source code changes beyond the manifest in this task.",
+      "filesPlanned": [
+        "package.json"
+      ]
+    },
+    {
+      "id": "T2_RED_NETWORK_CONFIG",
+      "title": "Add RED tests for stellarNetworkConfig",
+      "status": "pending",
+      "description": "Write failing tests for the testnet-only config module before implementation, covering all five STELLAR_* vars and the mainnet-rejection fail-safe.",
+      "testsSpec": [
+        "getStellarNetworkConfig accepts STELLAR_NETWORK=testnet plus the exact testnet passphrase and returns all five fields",
+        "getStellarNetworkConfig throws unsupported_network for any non-testnet network value",
+        "getStellarNetworkConfig throws mainnet_forbidden when STELLAR_NETWORK_PASSPHRASE is a mainnet/public-network passphrase",
+        "getStellarNetworkConfig throws missing_network_config when a required STELLAR_* var is absent",
+        "getStellarNetworkConfig throws invalid_network_config when a STELLAR_* var is malformed",
+        "isSupportedStellarNetwork returns false for non-testnet input and never defaults to mainnet",
+        "No legacy/ import appears in the new config file"
+      ]
+    },
+    {
+      "id": "T3_GREEN_NETWORK_CONFIG",
+      "title": "Implement stellarNetworkConfig testnet-only guard",
+      "status": "pending",
+      "description": "Implement stellarNetworkConfig.ts mirroring solanaNetworkConfig.ts: coded error factory, resolve guard, and config builder reading the five STELLAR_* vars. Reject any mainnet passphrase; accept only testnet. Never default to mainnet.",
+      "filesPlanned": [
+        "back/services/stellar/providers/stellarNetworkConfig.ts",
+        "back/services/stellar/providers/__tests__/stellarNetworkConfig.test.ts"
+      ]
+    },
+    {
+      "id": "T4_RED_CONNECTION",
+      "title": "Add RED tests for stellarConnection",
+      "status": "pending",
+      "description": "Write failing tests asserting that the connection module builds Horizon and Soroban clients from the validated config.",
+      "testsSpec": [
+        "getHorizonServer returns a Horizon Server client built from STELLAR_HORIZON_URL",
+        "getSorobanRpc returns a Soroban RPC client built from STELLAR_RPC_URL",
+        "Clients are constructed only from a validated StellarNetworkConfig (no hardcoded mainnet endpoints)",
+        "Repeated calls return the same singleton client instance",
+        "No legacy/ import appears in the new connection file"
+      ]
+    },
+    {
+      "id": "T5_GREEN_CONNECTION",
+      "title": "Implement stellarConnection Horizon + Soroban clients",
+      "status": "pending",
+      "description": "Implement stellarConnection.ts mirroring solanaConnection.ts: lazy singleton getHorizonServer() and getSorobanRpc() constructed from the validated config. Horizon is primary for classic multisig account-state reads; Soroban RPC reserved for later smart-contract calls.",
+      "filesPlanned": [
+        "back/services/stellar/providers/stellarConnection.ts",
+        "back/services/stellar/providers/__tests__/stellarConnection.test.ts"
+      ]
+    },
+    {
+      "id": "T6_RED_FRIENDBOT",
+      "title": "Add RED tests for the Friendbot helper",
+      "status": "pending",
+      "description": "Write failing tests for fundTestnetAccount before implementation, covering successful funding and error surfacing.",
+      "testsSpec": [
+        "fundTestnetAccount funds a fresh testnet account via STELLAR_FRIENDBOT_URL",
+        "After funding, the account read through Horizon reports a positive XLM balance",
+        "fundTestnetAccount surfaces a clear error when Friendbot funding fails and does not swallow it",
+        "No legacy/ import appears in the new friendbot file"
+      ]
+    },
+    {
+      "id": "T7_GREEN_FRIENDBOT",
+      "title": "Implement the Friendbot funding helper",
+      "status": "pending",
+      "description": "Implement friendbot.ts with fundTestnetAccount(publicKey), a shared helper usable by both backend tests and the Wave 6 demo script. Reads STELLAR_FRIENDBOT_URL from validated config.",
+      "filesPlanned": [
+        "back/services/stellar/providers/friendbot.ts",
+        "back/services/stellar/providers/__tests__/friendbot.test.ts"
+      ]
+    },
+    {
+      "id": "T8_DOC_ENV_EXAMPLE",
+      "title": "Document STELLAR_* vars in .env.example",
+      "status": "pending",
+      "description": "Add the five STELLAR_* variables verbatim to .env.example next to the existing SOLANA_* block: STELLAR_NETWORK=testnet, STELLAR_NETWORK_PASSPHRASE=\"Test SDF Network ; September 2015\", STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org, STELLAR_RPC_URL=https://soroban-testnet.stellar.org, STELLAR_FRIENDBOT_URL=https://friendbot.stellar.org. Edit only; no other lines changed.",
+      "filesPlanned": [
+        ".env.example"
+      ]
+    },
+    {
+      "id": "T9_VALIDATE",
+      "title": "Validate Stellar Wave 1 and pause for review",
+      "status": "pending",
+      "description": "Run the full validation suite and confirm Solana tests stay green, the brain is untouched, and no legacy/ imports were added. Stop for parent review.",
+      "testsSpec": [
+        "npm run test:back passes including unchanged Solana provider tests",
+        "npm run lint exits clean (allowing the pre-existing app/layout.tsx Fast Refresh warning)",
+        "npx tsc --noEmit --pretty false exits clean",
+        "No file under back/services/{domains,mcp,support} (the brain) was modified",
+        "No legacy/ import was introduced"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}

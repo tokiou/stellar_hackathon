@@ -1,0 +1,161 @@
+{
+  "id": "stellar-wave-2-xdr-decoder",
+  "title": "Stellar Wave 2 — XDR decoder to semantic facts",
+  "status": "planned",
+  "branch": "feature/stellar-wave-2-xdr-decoder",
+  "baseBranch": "main",
+  "goal": "Implement ChainAdapter.decode for Stellar: parse a base64 TransactionEnvelope XDR via @stellar/stellar-sdk into the Wave 0 chain-neutral SemanticFacts so the unchanged brain can evaluate Stellar transactions without knowing anything about XDR, stroops, or assets. Add stroop/decimal conversion, a configurable price provider with a stub fallback, and wire it into a StellarChainAdapter.decode sibling of SolanaChainAdapter.",
+  "dependsOn": [
+    "stellar-wave-0-chain-adapter-boundary",
+    "stellar-wave-1-stellar-connectivity"
+  ],
+  "context": {
+    "analysisSource": "docs/stellar-wave-0-chain-adapter-boundary/functional-spec.md (ChainAdapter, ChainId, SemanticFacts in shared/types/chainContracts.ts)",
+    "precedent": "back/services/solana/transactions/ (Solana tx decoding/payload modules) and docs/wave-6-signer-adapter/ (spec conventions)",
+    "relatedCode": [
+      "shared/types/chainContracts.ts",
+      "back/services/solana/transactions/transactionPayloadTypes.ts",
+      "back/services/solana/transactions/transferTransactionPayload.ts",
+      "back/services/solana/providers/priceQuote.ts",
+      ".env.example (FALLBACK_SOL_USD_PRICE precedent)"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "How should issued assets be valued in USD on testnet, where no reliable live price feed exists?",
+      "resolution": "DECIDED: Start with a stub/allowlist price provider behind config, analogous to FALLBACK_SOL_USD_PRICE. Native XLM uses FALLBACK_XLM_USD_PRICE when live pricing is unavailable. Issued assets without a known price return null/stub from stellarPriceProvider; the policy engine treats an unknown amountUsd conservatively. Live issued-asset pricing is deferred to a later wave."
+    },
+    {
+      "id": "Q2",
+      "question": "How should a multi-operation TransactionEnvelope be represented to the policy engine — one candidate per envelope with worst-case risk, or one candidate per operation?",
+      "resolution": "DECIDED: One per-envelope SemanticFacts candidate. The decoder surfaces all operations in order via operations[], and the candidate escalates to the worst-case risk if ANY operation is critical. This keeps the brain consuming a single neutral candidate per submitted transaction (matching the Solana model) while preserving per-operation detail for audit. Policy-engine consumption of the per-operation detail and the escalation rule is documented for and implemented in Wave 3."
+    }
+  ],
+  "acceptanceCriteria": [
+    "stellarTransactionDecoder parses a base64 TransactionEnvelope XDR into SemanticFacts consumable by the UNCHANGED policy engine.",
+    "Stroop/decimal conversion is correct at 7 decimals (10,000,000 stroops = 1 XLM), distinct from Solana lamports (9 decimals).",
+    "Native XLM and issued assets (code + issuer) both map cleanly to the neutral SemanticFacts.asset field.",
+    "Multi-operation and path-payment envelopes are decoded in full — ALL operations are surfaced in order, not just the first.",
+    "Malformed or non-parseable XDR is rejected with a clear decode error and produces no partial or ambiguous SemanticFacts.",
+    "A multi-operation envelope is represented as one per-envelope candidate that escalates to worst-case risk if any operation is critical (documented for Wave 3).",
+    "stellarPriceProvider maps amount to amountUsd behind a configurable provider with a stub fallback (FALLBACK_XLM_USD_PRICE) analogous to Solana.",
+    "StellarChainAdapter.decode returns the Wave 0 SemanticFacts type and is resolvable through chainRegistry for ChainId 'stellar'.",
+    "The brain is untouched: policy engine, LLM judge, decision sanitizer, COMPASS_DECISIONS semantics, and the MCP proxy.",
+    "Solana keeps working unchanged and all existing Solana tests stay green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No change to Solana decoding or Solana behavior",
+    "No change to the brain (policy engine, LLM judge, decision sanitizer, COMPASS_DECISIONS semantics, MCP proxy)",
+    "No ChainAdapter.cosign, submit, or inspectAccount implementation — decode only",
+    "No production-grade USD valuation for issued assets (testnet stub/allowlist only)",
+    "No Soroban contract-invocation decoding",
+    "No new MCP tools and no signer behavior change",
+    "No mainnet readiness",
+    "No legacy/ imports"
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false",
+    "Manual: decode a base64 XDR of a testnet native-XLM payment and confirm SemanticFacts { actionKind: 'transfer', recipientAddress, asset: 'XLM', amount, amountUsd }",
+    "Manual: decode an issued-asset payment and confirm asset carries code + issuer",
+    "Manual: decode a multi-operation envelope and confirm all operations are surfaced in order as one per-envelope candidate",
+    "Manual: pass malformed/non-base64 XDR and confirm a clear decode error with no partial fact"
+  ],
+  "tasks": [
+    {
+      "id": "T1_RED_STELLAR_AMOUNT",
+      "title": "Add RED stroop/decimal conversion tests",
+      "status": "pending",
+      "description": "Write failing tests for stellarAmount stroop <-> display conversion before implementation.",
+      "testsSpec": [
+        "1 XLM equals 10,000,000 stroops at 7 decimals",
+        "Sub-unit stroop amounts convert to the correct 7-decimal display string",
+        "Round-trip stroops -> display -> stroops is lossless with no float drift",
+        "The divisor is 10^7 and differs from the Solana lamport divisor (10^9)",
+        "No legacy/ import appears in the new stellarAmount file"
+      ]
+    },
+    {
+      "id": "T2_GREEN_STELLAR_AMOUNT",
+      "title": "Implement stellarAmount conversion module",
+      "status": "pending",
+      "description": "Create stellarAmount.ts converting stroops <-> display units at 7 decimals using string/bigint math (no floating point).",
+      "filesPlanned": [
+        "back/services/stellar/transactions/stellarAmount.ts",
+        "back/services/stellar/__tests__/stellarAmount.test.ts"
+      ]
+    },
+    {
+      "id": "T3_RED_PRICE_PROVIDER",
+      "title": "Add RED price provider tests",
+      "status": "pending",
+      "description": "Write failing tests for stellarPriceProvider amount -> amountUsd mapping and stub fallback before implementation.",
+      "testsSpec": [
+        "amountToUsd returns the configured price for native XLM",
+        "amountToUsd falls back to FALLBACK_XLM_USD_PRICE when no live price is available",
+        "amountToUsd returns null/stub for an unknown issued asset",
+        "No legacy/ import appears in the new stellarPriceProvider file"
+      ]
+    },
+    {
+      "id": "T4_GREEN_PRICE_PROVIDER",
+      "title": "Implement stellarPriceProvider with stub fallback",
+      "status": "pending",
+      "description": "Create stellarPriceProvider.ts behind config with a stub/allowlist provider and FALLBACK_XLM_USD_PRICE fallback. Add FALLBACK_XLM_USD_PRICE to .env.example.",
+      "filesPlanned": [
+        "back/services/stellar/providers/stellarPriceProvider.ts",
+        "back/services/stellar/__tests__/stellarPriceProvider.test.ts",
+        ".env.example"
+      ]
+    },
+    {
+      "id": "T5_RED_DECODER",
+      "title": "Add RED XDR decoder tests",
+      "status": "pending",
+      "description": "Write failing tests for stellarTransactionDecoder across native, issued, multi-op, and malformed inputs before implementation.",
+      "testsSpec": [
+        "Native-XLM payment XDR decodes to SemanticFacts { actionKind: 'transfer', recipientAddress, asset: 'XLM', amount, amountUsd }",
+        "Issued-asset payment XDR decodes with asset carrying code + issuer",
+        "Multi-operation / path-payment envelope surfaces ALL operations in order as one per-envelope candidate",
+        "Malformed / non-base64 / non-envelope input returns { ok: false, reason: 'MALFORMED_XDR' } with no partial fact",
+        "Source account and memo are carried into SemanticFacts",
+        "No legacy/ import appears in the new decoder file"
+      ]
+    },
+    {
+      "id": "T6_GREEN_DECODER",
+      "title": "Implement stellarTransactionDecoder",
+      "status": "pending",
+      "description": "Create stellarTransactionDecoder.ts parsing a base64 TransactionEnvelope via @stellar/stellar-sdk into SemanticFacts: source account, ordered operations (all of them), per-payment destination/asset/amount, memo, and amountUsd via stellarPriceProvider. Fail safe on malformed XDR.",
+      "filesPlanned": [
+        "back/services/stellar/transactions/stellarTransactionDecoder.ts",
+        "back/services/stellar/__tests__/stellarTransactionDecoder.test.ts"
+      ]
+    },
+    {
+      "id": "T7_GREEN_ADAPTER_WIRING",
+      "title": "Wire decoder into StellarChainAdapter.decode",
+      "status": "pending",
+      "description": "Implement StellarChainAdapter.decode (sibling to SolanaChainAdapter) delegating to stellarTransactionDecoder, returning the Wave 0 SemanticFacts type, and resolvable through chainRegistry for ChainId 'stellar'.",
+      "filesPlanned": [
+        "back/services/stellar/stellarChainAdapter.ts"
+      ]
+    },
+    {
+      "id": "T8_VALIDATE_REVIEW",
+      "title": "Validate and pause for review",
+      "status": "pending",
+      "description": "Run the full validation suite and stop for parent review. Confirm the brain is untouched and all Solana tests stay green before proceeding to Wave 3.",
+      "validationCommands": [
+        "npm run test:back",
+        "npm run lint",
+        "npx tsc --noEmit --pretty false"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}

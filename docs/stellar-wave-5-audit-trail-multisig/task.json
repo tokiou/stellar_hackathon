@@ -1,0 +1,132 @@
+{
+  "id": "stellar-wave-5-audit-trail-multisig",
+  "title": "Stellar Wave 5 — Audit trail for multisig (additive signer evidence)",
+  "status": "planned",
+  "branch": "feature/stellar-wave-5-audit-trail-multisig",
+  "baseBranch": "main",
+  "goal": "Extend the persisted Compass audit trail so the multisig story is provable from the record alone. Add OPTIONAL, additive fields to the hosted-side AuditEntry (chain, network, sourceAccount, destination, asset, amount, requiredSigners, collectedSigners, threshold, txHash, networkError, lifecycle), and add a mapper that builds the extended metadata from Wave 0's ChainAuditMetadata plus Wave 4's co-signing result. Every new field is optional so existing Solana audit entries validate unchanged; the brain stays untouched.",
+  "dependsOn": [
+    "stellar-wave-0-chain-adapter-boundary",
+    "stellar-wave-4-cosigning-multisig"
+  ],
+  "context": {
+    "analysisSource": "The hosted-side persisted AuditEntry (shared/types/evaluationContracts.ts, ~lines 72-81) is minimal: correlationId, auditRef, toolName, decision, riskLevel, reasons, outcome, occurredAt. It has NO chain, network, source/destination, asset, amount, txHash, and NO multisig fields. The richer back-side AuditEvent (shared/types/executionGatewayContracts.ts, lines 75-93) has chain/network/transactionSignature but is effectively single-chain and has NO signer/threshold fields. Without signer fields the demo CANNOT show 'Compass did not sign -> not executable' from the audit record. This is a demo-evidence gap.",
+    "precedent": "docs/wave-6-signer-adapter/",
+    "relatedCode": [
+      "shared/types/evaluationContracts.ts",
+      "shared/types/auditContracts.ts",
+      "shared/types/executionGatewayContracts.ts",
+      "hosted/audit/auditStore.ts",
+      "hosted/audit/auditContracts.ts",
+      "hosted/audit/auditValidators.ts",
+      "back/services/domains/transfer/transferGatewayContracts.ts",
+      "back/services/domains/transfer/transferAuditLog.ts",
+      "back/services/mcp/proxy/mcpProxyAudit.ts",
+      "back/services/mcp/proxy/mcpAuditSink.ts"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "Should Wave 5 extend the lean persisted AuditEntry, the rich back-side AuditEvent, or unify the two?",
+      "resolution": "DECIDED: Extend the lean persisted AuditEntry additively and carry the signer fields there. AuditEntry is the record that is actually persisted and validated (hosted/audit), so the multisig evidence must live where a reviewer reads it. The new fields are all OPTIONAL, so Solana entries that omit them stay valid. Unifying AuditEntry and AuditEvent is a larger refactor with no demo payoff and is deferred."
+    },
+    {
+      "id": "Q2",
+      "question": "Should the full transaction XDR be persisted in the audit record, or only the semantic facts plus a hash?",
+      "resolution": "DECIDED: Persist semantic facts (chain, network, accounts, asset, amount, signer counts, threshold, lifecycle) plus an OPTIONAL hash. Do NOT persist raw XDR, raw tx bytes, or any secret material by default — it is large and privacy-sensitive and the audit record's job is provable evidence, not replay. Full-XDR persistence behind an explicit flag is deferred to a later wave."
+    }
+  ],
+  "acceptanceCriteria": [
+    "All new fields on AuditEntry are OPTIONAL and additive; an entry with none of them still validates.",
+    "Pre-Wave-5 Solana audit entries validate, persist, and list unchanged (backward compatibility).",
+    "chain (Wave 0 ChainId) and network are recorded for Stellar audit entries.",
+    "requiredSigners, collectedSigners, and threshold are recorded for multisig actions.",
+    "sourceAccount, destination, asset, and amount are recorded as semantic facts (no raw XDR).",
+    "txHash is recorded on successful execution; networkError is recorded on submission failure.",
+    "A lifecycle state from PROPOSED | COSIGNED_BY_COMPASS | SUBMITTED | CONFIRMED | REJECTED | DENIED is recorded.",
+    "A mapper builds the extended metadata from Wave 0 ChainAuditMetadata plus the Wave 4 co-signing result.",
+    "hosted/audit/auditValidators.ts accepts both the old and the new entry shapes.",
+    "The brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS, MCP proxy) is untouched and existing Solana tests stay green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No change to Solana runtime behavior — Solana audit entries keep validating and persisting unchanged.",
+    "No change to the brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS, MCP proxy).",
+    "No persistence of raw XDR, raw tx bytes, private keys, or secret material in the audit record.",
+    "No making any new field required.",
+    "No new audit storage backend, retention policy, or query API beyond the additive fields.",
+    "No frontend/dashboard surfacing of the new fields.",
+    "No unification of AuditEntry and AuditEvent.",
+    "No legacy/ imports."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false"
+  ],
+  "tasks": [
+    {
+      "id": "T1_RED_AUDIT_ENTRY_FIELDS",
+      "title": "Add RED tests for additive AuditEntry fields and validator tolerance",
+      "status": "pending",
+      "description": "Before implementation, write tests asserting: an entry with only the original fields validates (backward compatibility); an entry with the full set of new optional fields validates; an entry with an invalid present field (bad lifecycle, negative threshold, non-ChainId chain) fails validation; a pre-Wave-5 Solana entry round-trips through auditStore write/list unchanged.",
+      "testsSpec": [
+        "isAuditEntry returns true for an entry with only correlationId/auditRef/toolName/decision/riskLevel/reasons/occurredAt",
+        "isAuditEntry returns true for an entry that also carries chain/network/requiredSigners/collectedSigners/threshold/lifecycle/txHash",
+        "isAuditEntry returns false for lifecycle not in AUDIT_LIFECYCLE_STATES",
+        "isAuditEntry returns false for a negative threshold or non-integer collectedSigners",
+        "isAuditEntry returns false for a chain value that is not a valid ChainId",
+        "a legacy Solana AuditEntry round-trips through auditStore write/list unchanged",
+        "No legacy/ import appears in any touched audit file"
+      ]
+    },
+    {
+      "id": "T2_GREEN_AUDIT_ENTRY_FIELDS",
+      "title": "Add optional AuditEntry fields and the lifecycle const",
+      "status": "pending",
+      "description": "Add AUDIT_LIFECYCLE_STATES const + AuditLifecycleState type and the OPTIONAL fields (chain, network, sourceAccount, destination, asset, amount, requiredSigners, collectedSigners, threshold, txHash, networkError, lifecycle) to AuditEntry. Keep types/contracts separate from behavior. Update auditValidators isAuditEntry to keep the original required-field checks and add guarded optional-field checks (pass when absent, validate when present).",
+      "filesPlanned": [
+        "shared/types/evaluationContracts.ts",
+        "hosted/audit/auditValidators.ts"
+      ]
+    },
+    {
+      "id": "T3_RED_STELLAR_AUDIT_MAPPER",
+      "title": "Add RED tests for the stellar audit metadata mapper",
+      "status": "pending",
+      "description": "Write tests for buildStellarAuditMetadata before implementation, covering the deny/non-cosigned case, the cosigned/confirmed case, the submission-failure case, and the no-secret-leak guarantee.",
+      "testsSpec": [
+        "buildStellarAuditMetadata for a non-cosigned DENY yields collectedSigners < requiredSigners, sets threshold, and lifecycle DENIED",
+        "buildStellarAuditMetadata for a cosigned confirmed execution yields collectedSigners == requiredSigners, a non-empty txHash, and lifecycle CONFIRMED",
+        "buildStellarAuditMetadata for a submission failure sets networkError, leaves txHash absent, and sets lifecycle REJECTED",
+        "mapper output carries chain/network/sourceAccount/destination/asset/amount from ChainAuditMetadata",
+        "mapper output contains no raw XDR, raw tx bytes, or secret material",
+        "No legacy/ import appears in the mapper file"
+      ]
+    },
+    {
+      "id": "T4_GREEN_STELLAR_AUDIT_MAPPER",
+      "title": "Implement the stellar audit metadata mapper",
+      "status": "pending",
+      "description": "Create back/services/stellar/audit/stellarAuditMetadata.ts. buildStellarAuditMetadata reads chain-neutral facts from Wave 0 ChainAuditMetadata and signer facts from the Wave 4 co-signing result, derives the lifecycle state, and returns only the optional AuditEntry extension fields. Never read or emit raw XDR or secret material.",
+      "filesPlanned": [
+        "back/services/stellar/audit/stellarAuditMetadata.ts",
+        "back/services/stellar/audit/__tests__/stellarAuditMetadata.test.ts"
+      ]
+    },
+    {
+      "id": "T5_VALIDATE_REVIEW",
+      "title": "Validate and pause for review",
+      "status": "pending",
+      "description": "Run the full validation suite and stop for parent review. Confirm backward compatibility (Solana entries unchanged), the brain untouched, and no legacy imports before any later wave consumes the enriched audit record.",
+      "validationCommands": [
+        "npm run test:back",
+        "npm run lint",
+        "npx tsc --noEmit --pretty false"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}

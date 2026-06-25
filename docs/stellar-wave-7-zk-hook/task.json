@@ -1,0 +1,110 @@
+{
+  "id": "stellar-wave-7-zk-hook",
+  "title": "Stellar Wave 7 — ZK proof hook (optional differentiator)",
+  "status": "planned",
+  "optional": true,
+  "branch": "feature/stellar-wave-7-zk-hook",
+  "baseBranch": "main",
+  "goal": "OPTIONAL / EXPLORATORY. Plan a zero-knowledge proof hook that attests Compass's co-signature corresponds to an evaluation that PASSED policy, without revealing the policy itself or the private inputs (amounts, thresholds). The proof sits between the brain's ALLOW decision (Waves 2-3) and the Wave 4 co-signature, bound to the exact co-signed transaction. PUBLIC = that a compliant evaluation occurred (and possibly the decision plus a tx commitment); PRIVATE = the policy rules, amounts, and thresholds. This wave is ONLY essential if the hackathon brief makes ZK a judged/central criterion; otherwise a ZK proof bolted on top would be DECORATIVE and must not be built. Solana keeps working unchanged and the brain stays untouched. Today there is ZERO ZK in the Compass codebase.",
+  "dependsOn": ["stellar-wave-3-operation-mapping", "stellar-wave-4-cosigning-multisig"],
+  "context": {
+    "analysisSource": "docs/PRODUCT_CONSTITUTION.md",
+    "precedent": "docs/judge-unblinding/",
+    "relatedCode": [
+      "hosted/onchain/onchainApproval.ts",
+      "hosted/evaluate/evaluationService.ts",
+      "back/services/support/signer/signerAdapterContracts.ts",
+      "back/services/support/signer/signerAdapter.ts",
+      ".opencode/skills/solana-dev/references/confidential-transfers.md"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "Which proving system should back the policy-compliance proof?",
+      "recommendation": "OPEN. Do not lock in at spec time. Choose only if the decision gate opens, weighing trusted setup, proof size, prover latency, and tooling maturity against what a judge actually rewards."
+    },
+    {
+      "id": "Q2",
+      "question": "What exactly is committed to bind the proof to the co-signed transaction?",
+      "recommendation": "OPEN. Leaning toward a commitment over the canonical TransactionEnvelope XDR fingerprint used by Wave 4, so the proof and the co-signature cover the same tx. Concrete scheme TBD."
+    },
+    {
+      "id": "Q3",
+      "question": "Where does the verifier run: off-chain or on Soroban?",
+      "recommendation": "OPEN. Off-chain is cheaper and simpler but only moves trust; a Soroban verifier is a stronger story but adds on-chain cost and a new attack surface. Decide against the judged criterion, not by default."
+    },
+    {
+      "id": "Q4",
+      "question": "Must the policy stay fully private, or is public-but-versioned acceptable?",
+      "recommendation": "OPEN. If the policy can be public-but-versioned, much of the ZK motivation evaporates; full privacy is the stronger differentiator but harder. Resolve only if the gate opens."
+    },
+    {
+      "id": "Q5",
+      "question": "What is the latency budget for proving, and must it run in-band with the co-signature?",
+      "recommendation": "OPEN. The codebase reasons in terms of an COMPASS_LLM_TIMEOUT_MS-style interactive budget; a real prover may not fit in-band and may need an async/out-of-band path. Measure before committing to an in-band UX claim."
+    }
+  ],
+  "acceptanceCriteria": [
+    "SPECULATIVE / GATED: a verifiable proof ties an ALLOW decision to a co-signature without exposing the policy or the private amounts/thresholds.",
+    "SPECULATIVE / GATED: the proof is bound to the exact transaction Compass co-signed (a commitment mismatch fails verification).",
+    "SPECULATIVE / GATED: a documented verifier exists (where it runs, what it checks, what it learns), even if off-chain only.",
+    "An explicit decision-gate sign-off is recorded in this task.json BEFORE any implementation begins.",
+    "Solana behavior is unchanged and the brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS, MCP proxy) is untouched.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No production ZK system; any output is a demo/differentiator hook at best.",
+    "No claim that ZK is needed for the core co-signer thesis; Waves 0-6 stand alone.",
+    "No specific proving-system lock-in at spec time.",
+    "No change to the brain.",
+    "No change to any Solana provider or Solana signing behavior.",
+    "No on-chain (Soroban) verifier commitment before the decision gate and an explicit verifier decision.",
+    "No legacy/ imports."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false"
+  ],
+  "decisionGate": {
+    "rule": "Do NOT implement this wave unless the hackathon brief makes ZK a judged/central criterion.",
+    "decorativeVsEssentialTest": "If ZK is not judged centrally, a proof bolted on top of Compass is DECORATIVE and must not be built; the core guarantee already comes from Stellar-native multisig plus the policy-gated co-signer (Waves 0-6).",
+    "signOff": "PENDING — no sign-off recorded. Implementation is blocked until this field records an explicit approval with the criterion that opened the gate."
+  },
+  "tasks": [
+    {
+      "id": "T1_DECISION_GATE",
+      "title": "Evaluate the decision gate before any implementation",
+      "status": "pending",
+      "description": "Read the actual hackathon brief and decide whether ZK is a judged/central criterion. Apply the decorative-vs-essential test from exploration.md. Record an explicit sign-off (or a documented decline) in decisionGate.signOff. No further task may start until this is recorded.",
+      "blocks": ["T2_DESIGN_ATTESTATION", "T3_DESIGN_VERIFIER", "T4_RED_TESTS", "T5_GREEN_HOOK"]
+    },
+    {
+      "id": "T2_DESIGN_ATTESTATION",
+      "title": "Design the policy-compliance attestation (gated)",
+      "status": "pending",
+      "description": "GATED on T1 sign-off. Resolve Q1, Q2, Q4: choose proving approach, the tx commitment scheme, and the policy privacy posture. Define the public/private split concretely so PRIVATE inputs (policy, amounts, thresholds) never appear in any public output."
+    },
+    {
+      "id": "T3_DESIGN_VERIFIER",
+      "title": "Design and document the verifier (gated)",
+      "status": "pending",
+      "description": "GATED on T1 sign-off. Resolve Q3, Q5: decide where the verifier runs (off-chain vs Soroban) and the proving latency posture (in-band vs async). Produce a documented verifier description: where it runs, what it checks, what it learns and does not learn."
+    },
+    {
+      "id": "T4_RED_TESTS",
+      "title": "Add RED tests for the attestation hook (gated)",
+      "status": "pending",
+      "description": "GATED on T1 sign-off. Write tests before implementation: commitment binding (tx A proof fails for tx B), privacy (no witness element leaks into the proof/public inputs), gating (attestor never runs on DENY/ESCALATE), and isolation (removing the hook keeps Wave 4 co-signing tests green and Solana paths unchanged)."
+    },
+    {
+      "id": "T5_GREEN_HOOK",
+      "title": "Implement the attestation + verifier hook (gated)",
+      "status": "pending",
+      "description": "GATED on T1 sign-off and green-after-RED on T4. Implement the speculative contracts from technical-spec.md (zkAttestationContracts.ts, policyComplianceAttestor.ts, zkVerifier.ts) as an additive, fail-open-for-proof hook that never alters the decision and never blocks the core co-signer thesis."
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}

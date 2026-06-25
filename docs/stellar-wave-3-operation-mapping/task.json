@@ -1,0 +1,134 @@
+{
+  "id": "stellar-wave-3-operation-mapping",
+  "title": "Stellar Wave 3 — Operation mapping and policy context",
+  "status": "planned",
+  "branch": "feature/stellar-wave-3-operation-mapping",
+  "baseBranch": "main",
+  "goal": "Add a mapping layer that translates decoded Stellar operations into the existing brain's vocabulary: a static operation->actionKind+riskClass table and a policy-context derivation function (amount_usd, recipient_address, recipient_known) extended additively with Stellar flags (changes_trustline, changes_signers). The brain stays untouched; this wave only feeds the existing policy engine the right inputs so the four decision-only demo cases resolve correctly. Solana stays unchanged.",
+  "dependsOn": ["stellar-wave-2-xdr-decoder"],
+  "context": {
+    "analysisSource": "docs/PRODUCT_CONSTITUTION.md",
+    "precedent": "docs/wave-6-signer-adapter/",
+    "relatedCode": [
+      "back/services/mcp/proxy/mcpProxyPolicyInterceptor.ts",
+      "hosted/evaluate/evaluationService.ts",
+      "shared/types/executionGatewayContracts.ts",
+      "shared/types/policyContracts.ts"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "What is the default disposition for an unmapped or future Stellar operation type that is not in the table?",
+      "resolution": "DECIDED: Fail-closed. Unmapped/future operation types map to riskClass BLOCKED_UNKNOWN with critical:true, forcing REQUIRE_HUMAN_APPROVAL (ESCALATE) rather than ALLOW. Never silently pass an unknown operation."
+    },
+    {
+      "id": "Q2",
+      "question": "Should the Stellar operation->actionKind table live in code or in policy configuration?",
+      "resolution": "DECIDED: In code for the MVP (a static table in stellarOperationMap.ts), so the mapping is testable and reviewable without config plumbing. Making the table configurable via policy config is deferred to a later wave."
+    }
+  ],
+  "acceptanceCriteria": [
+    "Every Stellar operation type maps to a defined actionKind and riskClass; there is no operation type for which the map is silent.",
+    "payment, pathPaymentStrictSend, and pathPaymentStrictReceive map to actionKind 'transfer' with riskClass SENSITIVE_EXECUTION.",
+    "changeTrust is marked critical, sets the additive flag changes_trustline:true, and forces REQUIRE_HUMAN_APPROVAL (ESCALATE).",
+    "setOptions is marked critical, sets the additive flag changes_signers:true, and forces REQUIRE_HUMAN_APPROVAL (ESCALATE).",
+    "createAccount maps to a transfer-like actionKind; manageData, manageSellOffer, manageBuyOffer, and other types map to the nearest actionKind with conservative escalate-by-default handling.",
+    "New context flags are additive: they extend PolicyEvaluationContext.flags without removing, renaming, or breaking any existing field or existing policy evaluation.",
+    "In a multi-operation envelope, if any operation is critical the whole envelope escalates.",
+    "An unmapped or future operation type defaults fail-closed to BLOCKED_UNKNOWN and escalation.",
+    "The four decision-only demo cases (ALLOW within policy, DENY on non-allowlisted destination, ESCALATE on amount out of range, ESCALATE on setOptions/changeTrust present) pass end-to-end using the UNCHANGED policy engine.",
+    "The brain (policy engine, LLM judge, sanitizer, COMPASS_DECISIONS) is untouched and Solana stays green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No change to the policy engine, LLM judge, sanitizer, COMPASS_DECISIONS contract, or MCP proxy decision logic (brain stays untouched).",
+    "No new decision types; reuse existing COMPASS_DECISIONS.",
+    "No removal or renaming of existing PolicyEvaluationContext fields (flags are additive only).",
+    "No changes to any Solana provider or Solana behavior.",
+    "No signing, submission, simulation, or co-signer/threshold logic (later waves).",
+    "No XDR decoding (Wave 2 owns that; Wave 3 consumes its output).",
+    "No mainnet support of any kind.",
+    "No legacy/ imports."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false"
+  ],
+  "tasks": [
+    {
+      "id": "T1_RED_OPERATION_MAP",
+      "title": "Add RED tests for the Stellar operation map",
+      "status": "pending",
+      "description": "Write failing tests asserting that mapStellarOperation returns the expected actionKind + riskClass for every known operation type, that changeTrust and setOptions are critical with their additive flags, and that unmapped types fail closed to BLOCKED_UNKNOWN + critical.",
+      "testsSpec": [
+        "payment, pathPaymentStrictSend, pathPaymentStrictReceive -> actionKind 'transfer', riskClass SENSITIVE_EXECUTION, critical:false",
+        "createAccount -> transfer-like actionKind, critical:false",
+        "changeTrust -> critical:true with contextFlags.changes_trustline:true",
+        "setOptions -> critical:true with contextFlags.changes_signers:true",
+        "manageData, manageSellOffer, manageBuyOffer -> mapped with conservative critical:true handling",
+        "an unmapped/future operation type -> riskClass BLOCKED_UNKNOWN, critical:true (fail-closed)",
+        "No legacy/ import appears in any new Wave 3 file"
+      ]
+    },
+    {
+      "id": "T2_GREEN_OPERATION_MAP",
+      "title": "Implement stellarOperationMap.ts",
+      "status": "pending",
+      "description": "Create the static operation->actionKind+riskClass table with critical flags and additive context flags, plus mapStellarOperation with a fail-closed default. Reuse TOOL_RISK_CLASSES from the shared contracts; introduce no new decision types.",
+      "filesPlanned": [
+        "back/services/stellar/operations/stellarOperationMap.ts",
+        "back/services/stellar/operations/__tests__/stellarOperationMap.test.ts"
+      ]
+    },
+    {
+      "id": "T3_RED_POLICY_CONTEXT",
+      "title": "Add RED tests for Stellar policy-context derivation",
+      "status": "pending",
+      "description": "Write failing tests for deriveStellarPolicyContext: single-payment context fields, additive flag merging, and multi-operation escalation when any operation is critical.",
+      "testsSpec": [
+        "single payment -> context with amount_usd, recipient_address, recipient_known derived from the decoded operation",
+        "changeTrust -> context.flags.changes_trustline:true with pre-existing flags preserved",
+        "setOptions -> context.flags.changes_signers:true with pre-existing flags preserved",
+        "envelope with one critical operation plus benign ones -> context drives escalation",
+        "existing flags (unknown_program, unlimited_delegate, authority_change, suspicious_recipient) are never removed or renamed"
+      ]
+    },
+    {
+      "id": "T4_GREEN_POLICY_CONTEXT",
+      "title": "Implement stellarPolicyContext.ts",
+      "status": "pending",
+      "description": "Create deriveStellarPolicyContext that aggregates decoded operations into the existing PolicyEvaluationContext shape, additively merges the changes_trustline / changes_signers flags, and escalates the whole envelope if any operation is critical. Read-only against Wave 2 decoded operations.",
+      "filesPlanned": [
+        "back/services/stellar/operations/stellarPolicyContext.ts",
+        "back/services/stellar/operations/__tests__/stellarPolicyContext.test.ts"
+      ]
+    },
+    {
+      "id": "T5_DECISION_DEMO_CASES",
+      "title": "Add decision-only end-to-end tests against the unchanged policy engine",
+      "status": "pending",
+      "description": "Wire the mapping outputs into the existing policy engine in tests and assert the four demo cases resolve correctly without modifying the brain.",
+      "testsSpec": [
+        "legit payment within policy to allowlisted recipient -> ALLOW",
+        "payment to non-allowlisted destination -> DENY",
+        "payment amount out of range -> REQUIRE_HUMAN_APPROVAL (ESCALATE)",
+        "envelope containing setOptions or changeTrust -> REQUIRE_HUMAN_APPROVAL (ESCALATE)"
+      ]
+    },
+    {
+      "id": "T6_VALIDATE",
+      "title": "Validate Wave 3 and pause for review",
+      "status": "pending",
+      "description": "Run the full validation suite and confirm Solana stays green and the brain is untouched before review.",
+      "validationCommands": [
+        "npm run test:back",
+        "npm run lint",
+        "npx tsc --noEmit --pretty false"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-25",
+  "updatedAt": "2026-06-25"
+}
