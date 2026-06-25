@@ -74,9 +74,13 @@ async function main() {
 		},
 	};
 
-	// 1. Create + fund the user/master account via Friendbot.
+	// 1. Create + fund the user/master account via Friendbot. The payment
+	// destination must also exist on the ledger, or `payment` fails with
+	// op_no_destination — so fund it too.
 	log(`${INFO} Funding ${user.publicKey()} via Friendbot...`);
 	await fundTestnetAccount(user.publicKey());
+	log(`${INFO} Funding destination ${destination} via Friendbot...`);
+	await fundTestnetAccount(destination);
 
 	// 2. Configure native multisig (master weight 1 + Compass weight 1, threshold 2).
 	const loaded = await server.loadAccount(user.publicKey());
@@ -130,7 +134,11 @@ async function main() {
 			priorSignatureCount: demo.userSigns ? 1 : 0,
 		});
 
+		const resultCodes = (error) =>
+			JSON.stringify(error?.response?.data?.extras?.result_codes ?? error?.message ?? "unknown");
+
 		let observedOutcome = "not_submitted";
+		let submitDetail = "";
 		if (guard.cosign.signed) {
 			try {
 				const finalTx = TransactionBuilder.fromXDR(
@@ -139,16 +147,18 @@ async function main() {
 				);
 				await server.submitTransaction(finalTx);
 				observedOutcome = "executable";
-			} catch {
+			} catch (error) {
 				observedOutcome = "not_executable";
+				submitDetail = resultCodes(error);
 			}
 		} else if (demo.submitWithoutCompass) {
 			// Prove non-executability: submit with only the user's signature.
 			try {
 				await server.submitTransaction(tx);
 				observedOutcome = "executable"; // unexpected — would fail the case
-			} catch {
+			} catch (error) {
 				observedOutcome = "not_executable";
+				submitDetail = resultCodes(error);
 			}
 		}
 
@@ -164,6 +174,7 @@ async function main() {
 			expectedOutcome: demo.expectedOutcome,
 			matched,
 			audit: guard.audit,
+			submitDetail,
 		});
 	}
 
@@ -171,7 +182,7 @@ async function main() {
 	for (const r of results) {
 		const mark = r.matched ? PASS : FAIL;
 		log(
-			`  ${mark} case ${r.id}: ${r.title} — decision ${r.decision} (exp ${r.expectedDecision}), outcome ${r.observedOutcome} (exp ${r.expectedOutcome}); audit ${r.audit.lifecycle} ${r.audit.collectedSigners}/${r.audit.requiredSigners}`,
+			`  ${mark} case ${r.id}: ${r.title} — decision ${r.decision} (exp ${r.expectedDecision}), outcome ${r.observedOutcome} (exp ${r.expectedOutcome}); audit ${r.audit.lifecycle} ${r.audit.collectedSigners}/${r.audit.requiredSigners}${r.submitDetail ? ` [${r.submitDetail}]` : ""}`,
 		);
 	}
 
