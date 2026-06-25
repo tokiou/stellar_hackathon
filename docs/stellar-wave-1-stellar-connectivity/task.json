@@ -1,7 +1,7 @@
 {
   "id": "stellar-wave-1-stellar-connectivity",
   "title": "Stellar Wave 1 — Stellar Testnet connectivity",
-  "status": "planned",
+  "status": "implemented_ready_for_verification",
   "branch": "feature/stellar-wave-1-stellar-connectivity",
   "baseBranch": "main",
   "goal": "Stand up Stellar Testnet connectivity as a parallel 'body' for Compass, analogous to the existing Solana providers: a fail-safe testnet-only network config module, a Horizon + Soroban connection module, and a Friendbot funding helper. Pure connectivity/infra with no policy logic. The brain stays untouched and Solana keeps working unchanged in parallel.",
@@ -59,7 +59,7 @@
     {
       "id": "T1_ADD_STELLAR_SDK_DEP",
       "title": "Add @stellar/stellar-sdk dependency",
-      "status": "pending",
+      "status": "completed",
       "description": "Add @stellar/stellar-sdk to package.json dependencies so Horizon and Soroban RPC clients can be constructed. No source code changes beyond the manifest in this task.",
       "filesPlanned": [
         "package.json"
@@ -68,7 +68,7 @@
     {
       "id": "T2_RED_NETWORK_CONFIG",
       "title": "Add RED tests for stellarNetworkConfig",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests for the testnet-only config module before implementation, covering all five STELLAR_* vars and the mainnet-rejection fail-safe.",
       "testsSpec": [
         "getStellarNetworkConfig accepts STELLAR_NETWORK=testnet plus the exact testnet passphrase and returns all five fields",
@@ -83,7 +83,7 @@
     {
       "id": "T3_GREEN_NETWORK_CONFIG",
       "title": "Implement stellarNetworkConfig testnet-only guard",
-      "status": "pending",
+      "status": "completed",
       "description": "Implement stellarNetworkConfig.ts mirroring solanaNetworkConfig.ts: coded error factory, resolve guard, and config builder reading the five STELLAR_* vars. Reject any mainnet passphrase; accept only testnet. Never default to mainnet.",
       "filesPlanned": [
         "back/services/stellar/providers/stellarNetworkConfig.ts",
@@ -93,7 +93,7 @@
     {
       "id": "T4_RED_CONNECTION",
       "title": "Add RED tests for stellarConnection",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests asserting that the connection module builds Horizon and Soroban clients from the validated config.",
       "testsSpec": [
         "getHorizonServer returns a Horizon Server client built from STELLAR_HORIZON_URL",
@@ -106,7 +106,7 @@
     {
       "id": "T5_GREEN_CONNECTION",
       "title": "Implement stellarConnection Horizon + Soroban clients",
-      "status": "pending",
+      "status": "completed",
       "description": "Implement stellarConnection.ts mirroring solanaConnection.ts: lazy singleton getHorizonServer() and getSorobanRpc() constructed from the validated config. Horizon is primary for classic multisig account-state reads; Soroban RPC reserved for later smart-contract calls.",
       "filesPlanned": [
         "back/services/stellar/providers/stellarConnection.ts",
@@ -116,7 +116,7 @@
     {
       "id": "T6_RED_FRIENDBOT",
       "title": "Add RED tests for the Friendbot helper",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests for fundTestnetAccount before implementation, covering successful funding and error surfacing.",
       "testsSpec": [
         "fundTestnetAccount funds a fresh testnet account via STELLAR_FRIENDBOT_URL",
@@ -128,7 +128,7 @@
     {
       "id": "T7_GREEN_FRIENDBOT",
       "title": "Implement the Friendbot funding helper",
-      "status": "pending",
+      "status": "completed",
       "description": "Implement friendbot.ts with fundTestnetAccount(publicKey), a shared helper usable by both backend tests and the Wave 6 demo script. Reads STELLAR_FRIENDBOT_URL from validated config.",
       "filesPlanned": [
         "back/services/stellar/providers/friendbot.ts",
@@ -138,7 +138,7 @@
     {
       "id": "T8_DOC_ENV_EXAMPLE",
       "title": "Document STELLAR_* vars in .env.example",
-      "status": "pending",
+      "status": "completed",
       "description": "Add the five STELLAR_* variables verbatim to .env.example next to the existing SOLANA_* block: STELLAR_NETWORK=testnet, STELLAR_NETWORK_PASSPHRASE=\"Test SDF Network ; September 2015\", STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org, STELLAR_RPC_URL=https://soroban-testnet.stellar.org, STELLAR_FRIENDBOT_URL=https://friendbot.stellar.org. Edit only; no other lines changed.",
       "filesPlanned": [
         ".env.example"
@@ -147,7 +147,7 @@
     {
       "id": "T9_VALIDATE",
       "title": "Validate Stellar Wave 1 and pause for review",
-      "status": "pending",
+      "status": "completed",
       "description": "Run the full validation suite and confirm Solana tests stay green, the brain is untouched, and no legacy/ imports were added. Stop for parent review.",
       "testsSpec": [
         "npm run test:back passes including unchanged Solana provider tests",
@@ -159,5 +159,34 @@
     }
   ],
   "createdAt": "2026-06-25",
-  "updatedAt": "2026-06-25"
+  "updatedAt": "2026-06-25",
+  "implementationEvidence": {
+    "mode": "Connectivity/infra; additive; testnet-only; brain & Solana untouched",
+    "branch": "feature/stellar-wave-1-stellar-connectivity (stacked on feature/stellar-wave-0-chain-adapter-boundary)",
+    "dependencyAdded": "@stellar/stellar-sdk ^15.1.0 (Horizon.Server, rpc.Server, Networks.TESTNET)",
+    "filesAdded": [
+      "back/services/stellar/providers/stellarNetworkConfig.ts",
+      "back/services/stellar/providers/stellarConnection.ts",
+      "back/services/stellar/providers/friendbot.ts",
+      "back/services/stellar/providers/__tests__/stellarNetworkConfig.test.ts",
+      "back/services/stellar/providers/__tests__/stellarConnection.test.ts",
+      "back/services/stellar/providers/__tests__/friendbot.test.ts"
+    ],
+    "filesEdited": [
+      ".env.example (added the five STELLAR_* vars next to the SOLANA_* block)",
+      "package.json / package-lock.json (@stellar/stellar-sdk)"
+    ],
+    "commands": [
+      "npm run test:back -> 336 passed (34 files), incl. 16 new Stellar tests",
+      "npm run test:back -- back/services/stellar -> 16 passed",
+      "tsc --noEmit -> only the 1 PRE-EXISTING mcpProxyDispatcher error remains; zero new errors from Wave 1",
+      "eslint back/services/stellar -> 0 problems"
+    ],
+    "deviations": [
+      "STELLAR_NETWORK_PASSPHRASE is REQUIRED (not defaulted): absent -> missing_network_config, mainnet passphrase -> mainnet_forbidden, any other -> invalid_network_config. This is the safest design (never assume the passphrase) and makes all four coded errors reachable/testable.",
+      "Horizon/Soroban/Friendbot URLs default to the known Testnet endpoints (ergonomic, never mainnet) and are validated as http(s) URLs.",
+      "Friendbot funding is unit-tested with a mocked global fetch (success -> {funded:true}; non-OK -> throws, never swallows). Real-network funding + positive-balance assertion is exercised by the Wave 6 demo/integration, kept out of unit tests to stay offline/deterministic.",
+      "getStellarNetworkConfig takes an injectable env (Record<string,string|undefined>) for testability; default is process.env."
+    ]
+  }
 }
