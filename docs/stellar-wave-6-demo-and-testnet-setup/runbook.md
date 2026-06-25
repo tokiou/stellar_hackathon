@@ -1,6 +1,8 @@
 # Stellar Wave 6 Demo Runbook
 
-This runbook proves the Compass Stellar thesis end-to-end on the public Testnet: a fresh account is created and funded, its native multisig is configured so Compass is a required signer, and all six demo cases run with their expected decision and observable on-network outcome. Every command below is **PLANNED** — the demo script does not exist yet (this is a planning wave). The runbook documents the intended operator experience so the script can be built against it.
+This runbook proves the Compass Stellar thesis end-to-end on the public Testnet: a fresh account is created and funded, its native multisig is configured so Compass is a required signer, and all six demo cases run with their expected decision and observable on-network outcome.
+
+**Implemented:** `scripts/stellar-demo.mjs` runs the entire flow (create+fund → configure multisig → six cases → verdict table) in a single command. Run it with `tsx` so the TypeScript helpers and tsconfig path aliases resolve. The granular `--only=`/`--case=` invocations shown in the step-by-step section are illustrative of each phase the one-shot script performs; the implemented script does not parse those flags. The guard decision runs through the same brain the MCP proxy uses (`runStellarGuard` → `evaluateAction`); wiring Stellar tools into the MCP server transport is a follow-up (the pipeline is proxy-ready).
 
 > Reproducibility win: there is **no on-chain contract to deploy**. Stellar's native multisig (account signer weights + thresholds) enforces the policy gate at consensus level, unlike the Solana path which requires the Anchor program in `back/solana/agent-action-guard`.
 
@@ -21,7 +23,11 @@ export STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 export STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 export STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 export STELLAR_FRIENDBOT_URL=https://friendbot.stellar.org
-# Compass cosigner key configured per Wave 4 signer setup (do not commit secrets)
+# Compass cosigner key (Wave 4 signer) — required; testnet-only; do not commit secrets
+export COMPASS_STELLAR_SIGNER_ENABLED=true
+export COMPASS_STELLAR_SIGNER_SECRET=S...   # Compass testnet secret seed
+# Optional: native XLM USD stub used for amount thresholds
+export FALLBACK_XLM_USD_PRICE=0.1
 ```
 
 ## Quick path
@@ -29,13 +35,10 @@ export STELLAR_FRIENDBOT_URL=https://friendbot.stellar.org
 Run from the repo root:
 
 ```bash
-# PLANNED — script does not exist yet (Wave 6 planning)
-node scripts/stellar-demo.mjs
-# Optional fast fallback (gateway-direct instead of through the MCP proxy):
-node scripts/stellar-demo.mjs --gateway-direct
+npx tsx scripts/stellar-demo.mjs
 ```
 
-Expected: the script creates and funds a Testnet account, configures multisig, runs all six cases, prints a verdict table, and exits 0 only if every case matches expectation.
+Expected: the script creates and funds a Testnet account, configures multisig, asserts Compass is a required signer, runs all six cases, prints a verdict table, and exits 0 only if every case matches expectation.
 
 ## Step-by-step
 
