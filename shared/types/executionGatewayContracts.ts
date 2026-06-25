@@ -1,3 +1,5 @@
+import type { ChainId } from "./chainContracts";
+
 export const COMPASS_DECISIONS = {
 	ALLOW: "ALLOW",
 	DENY: "DENY",
@@ -36,7 +38,7 @@ export type ToolClassification = {
 
 export type ActionCandidateInput = {
 	id?: string;
-	chain: "solana";
+	chain: ChainId;
 	network: string;
 	toolName: string;
 	actionKind: string;
@@ -48,7 +50,7 @@ export type ActionCandidateInput = {
 
 export type ActionCandidate = {
 	id: string;
-	chain: "solana";
+	chain: ChainId;
 	network: string;
 	toolName: string;
 	actionKind: string;
@@ -76,7 +78,7 @@ export type AuditEvent = {
 	id: string;
 	occurredAt: string;
 	candidateId: string;
-	chain: "solana";
+	chain: ChainId;
 	network: string;
 	toolName: string;
 	actionKind: string;

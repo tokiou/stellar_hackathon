@@ -1,7 +1,7 @@
 {
   "id": "stellar-wave-0-chain-adapter-boundary",
   "title": "Stellar Wave 0 — Chain adapter boundary (enabler, no Stellar logic)",
-  "status": "planned",
+  "status": "implemented_ready_for_verification",
   "branch": "feature/stellar-wave-0-chain-adapter-boundary",
   "baseBranch": "main",
   "goal": "Introduce a neutral ChainAdapter abstraction and a ChainId type, then re-express the existing Solana code behind that adapter without changing any Solana behavior. Define the chain-neutral SemanticFacts/AccountSignerState/ChainAuditMetadata types the brain consumes, add a chainRegistry, implement SolanaChainAdapter, replace the hardcoded chain: \"solana\" literal types with ChainId, and inject chain/network from config in the hosted evaluation service. No Stellar implementation in this wave.",
@@ -66,7 +66,7 @@
     {
       "id": "T1_RED_CHAIN_CONTRACTS",
       "title": "Add RED tests for chain contracts and registry",
-      "status": "pending",
+      "status": "completed",
       "description": "Write tests, before implementation, asserting chainContracts.ts exports ChainId, SemanticFacts, AccountSignerState, ChainAuditMetadata, and ChainAdapter; that a class with only required members (chainId, decode, buildAuditMetadata) compiles; that resolveChainAdapter resolves Solana and rejects unregistered chains; and that no new chain file imports legacy/.",
       "testsSpec": [
         "chainContracts exports ChainAdapter, ChainId, SemanticFacts, AccountSignerState, ChainAuditMetadata (compile/shape)",
@@ -79,7 +79,7 @@
     {
       "id": "T2_GREEN_CHAIN_CONTRACTS",
       "title": "Implement chain contracts and registry",
-      "status": "pending",
+      "status": "completed",
       "description": "Create shared/types/chainContracts.ts (ChainId, SemanticFacts, AccountSignerState, ChainAuditMetadata, ChainAdapter) and back/services/chain/chainRegistry.ts (resolveChainAdapter by ChainId, Solana registered, CHAIN_ADAPTER_NOT_REGISTERED otherwise). Keep types separate from registry behavior.",
       "filesPlanned": [
         "shared/types/chainContracts.ts",
@@ -89,7 +89,7 @@
     {
       "id": "T3_RED_SOLANA_ADAPTER",
       "title": "Add RED tests for SolanaChainAdapter parity",
-      "status": "pending",
+      "status": "completed",
       "description": "Write tests, before implementation, asserting SolanaChainAdapter.decode produces SemanticFacts equal to the current Solana decode output for a representative transfer and swap payload, and that buildAuditMetadata contains no raw tx bytes or secret material.",
       "testsSpec": [
         "SolanaChainAdapter.chainId === \"solana\"",
@@ -102,7 +102,7 @@
     {
       "id": "T4_GREEN_SOLANA_ADAPTER",
       "title": "Implement SolanaChainAdapter wrapping existing Solana modules",
-      "status": "pending",
+      "status": "completed",
       "description": "Create back/services/chain/solana/solanaChainAdapter.ts that delegates to the existing Solana tx-build/sign/connection modules and adapts their inputs/outputs to the neutral types. Must not re-implement or alter Solana logic. Register it in chainRegistry.",
       "filesPlanned": [
         "back/services/chain/solana/solanaChainAdapter.ts"
@@ -111,7 +111,7 @@
     {
       "id": "T5_GREEN_CHAINID_AND_INJECTION",
       "title": "Replace chain literal types with ChainId and inject chain/network from config",
-      "status": "pending",
+      "status": "completed",
       "description": "Edit shared/types/executionGatewayContracts.ts to change the chain: \"solana\" literal types (ActionCandidate, AuditEvent) to chain: ChainId, preserving the COMPASS_DECISIONS contract semantics and runtime value \"solana\". Edit hosted/evaluate/evaluationService.ts to read chain/network from server config instead of the literal \"solana\" strings around lines 143, 180-181, 201; default config resolves to Solana. Do NOT touch the brain (policy engine, LLM judge, sanitizer, MCP proxy).",
       "filesPlanned": [
         "shared/types/executionGatewayContracts.ts",
@@ -121,7 +121,7 @@
     {
       "id": "T6_VALIDATE_REVIEW",
       "title": "Validate full suite and pause for review",
-      "status": "pending",
+      "status": "completed",
       "description": "Run the full validation suite to confirm all pre-existing Solana tests stay green, chain is typed as ChainId across contracts and evaluation service, and no brain files or legacy/ imports changed. Stop for parent review before any Stellar wave begins.",
       "testsSpec": [
         "npm run test:back",
@@ -131,5 +131,35 @@
     }
   ],
   "createdAt": "2026-06-25",
-  "updatedAt": "2026-06-25"
+  "updatedAt": "2026-06-25",
+  "implementationEvidence": {
+    "mode": "Adapter seam, additive; Solana behavior preserved",
+    "branch": "feature/stellar-wave-0-chain-adapter-boundary",
+    "filesAdded": [
+      "shared/types/chainContracts.ts",
+      "back/services/chain/chainRegistry.ts",
+      "back/services/chain/chainConfig.ts",
+      "back/services/chain/solana/solanaChainAdapter.ts",
+      "back/services/chain/__tests__/chainRegistry.test.ts",
+      "back/services/chain/__tests__/solanaChainAdapter.test.ts"
+    ],
+    "filesEdited": [
+      "shared/types/executionGatewayContracts.ts (chain: \"solana\" -> ChainId on ActionCandidateInput, ActionCandidate, AuditEvent)",
+      "hosted/evaluate/evaluationService.ts (chain/network injected via resolveChainConfig instead of literal \"solana\" at the 3 sites)"
+    ],
+    "commands": [
+      "npm run test:back -> 320 passed (31 files), incl. 8 new chain tests",
+      "npm run test:back -- back/services/chain -> 8 passed",
+      "tsc --noEmit -> only 1 PRE-EXISTING error remains (back/services/__tests__/mcpProxyDispatcher.test.ts stale import '../mcp/mcpProxyContracts'); zero new errors from Wave 0",
+      "eslint on Wave 0 files -> 0 problems",
+      "npm run lint (whole repo) -> 5 PRE-EXISTING errors in hosted/evaluate/evaluationValidators.ts (unused imports), unrelated to Wave 0"
+    ],
+    "preExistingBaselineNote": "Branch baseline already had 1 tsc error and 5 lint errors before Wave 0 (verified via git stash). Wave 0 introduces zero new tsc/lint errors and leaves the full backend suite green.",
+    "deviations": [
+      "SolanaChainAdapter.decode implements the SOL System-transfer payload (the concrete serialized VersionedTransaction the current builder produces); swap/other-program decode is deferred since the live Solana flow derives policy context from tool arguments, not from on-chain tx decode.",
+      "amountUsd is 0 at decode time by design: structural decode stays offline/deterministic and USD valuation is layered by the gateway/price provider.",
+      "Brain untouched: policyEngine.ts, llmDecisionAdapter.ts, llmDecisionSanitizer.ts, COMPASS_DECISIONS semantics, and back/services/mcp/proxy/* were not modified.",
+      "Gateways (transferGateway.ts/swapGateway.ts) still pass the literal value \"solana\", which remains assignable to ChainId; no behavior change."
+    ]
+  }
 }

@@ -3,6 +3,7 @@ import {
 	createActionCandidate,
 } from "@back/guardrail/execution/executionGateway";
 import { getPostHogClient, getInstallationDistinctId } from "@back/posthog/posthogClient";
+import { resolveChainConfig } from "@back/services/chain/chainConfig";
 import { COMPASS_DECISIONS } from "@shared/executionGatewayContracts";
 import {
 	callLlmJudge,
@@ -123,6 +124,7 @@ async function buildDecisionResponse(input: {
 	deps: EvaluationServiceDependencies;
 }): Promise<EvaluateActionResponse> {
 	const { request, routerResult, deps } = input;
+	const chainConfig = resolveChainConfig();
 
 	if (routerResult.classification === "skip") {
 		return {
@@ -140,7 +142,7 @@ async function buildDecisionResponse(input: {
 			sanitizeLlmJudgeInput({
 				toolName: request.toolName,
 				actionKind: "unknown",
-				network: "solana",
+				network: chainConfig.network,
 				deterministicDecision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
 				riskClass: "unknown",
 				reasonCodes: ["ROUTER_UNKNOWN"],
@@ -177,8 +179,8 @@ async function buildDecisionResponse(input: {
 	});
 	const candidate = createActionCandidate({
 		id: request.correlationId,
-		chain: "solana",
-		network: "solana",
+		chain: chainConfig.chain,
+		network: chainConfig.network,
 		toolName: request.toolName,
 		actionKind: routerResult.classification,
 		createdAt: request.requestedAt,
@@ -198,7 +200,7 @@ async function buildDecisionResponse(input: {
 		sanitizeLlmJudgeInput({
 			toolName: request.toolName,
 			actionKind: routerResult.classification,
-			network: "solana",
+			network: chainConfig.network,
 			deterministicDecision: policyEvaluation.decision,
 			riskClass: classification.riskClass,
 			reasonCodes: policyEvaluation.reasonCodes,
