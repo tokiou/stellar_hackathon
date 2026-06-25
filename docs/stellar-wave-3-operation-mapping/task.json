@@ -1,11 +1,13 @@
 {
   "id": "stellar-wave-3-operation-mapping",
   "title": "Stellar Wave 3 — Operation mapping and policy context",
-  "status": "planned",
+  "status": "implemented_ready_for_verification",
   "branch": "feature/stellar-wave-3-operation-mapping",
   "baseBranch": "main",
   "goal": "Add a mapping layer that translates decoded Stellar operations into the existing brain's vocabulary: a static operation->actionKind+riskClass table and a policy-context derivation function (amount_usd, recipient_address, recipient_known) extended additively with Stellar flags (changes_trustline, changes_signers). The brain stays untouched; this wave only feeds the existing policy engine the right inputs so the four decision-only demo cases resolve correctly. Solana stays unchanged.",
-  "dependsOn": ["stellar-wave-2-xdr-decoder"],
+  "dependsOn": [
+    "stellar-wave-2-xdr-decoder"
+  ],
   "context": {
     "analysisSource": "docs/PRODUCT_CONSTITUTION.md",
     "precedent": "docs/wave-6-signer-adapter/",
@@ -60,7 +62,7 @@
     {
       "id": "T1_RED_OPERATION_MAP",
       "title": "Add RED tests for the Stellar operation map",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests asserting that mapStellarOperation returns the expected actionKind + riskClass for every known operation type, that changeTrust and setOptions are critical with their additive flags, and that unmapped types fail closed to BLOCKED_UNKNOWN + critical.",
       "testsSpec": [
         "payment, pathPaymentStrictSend, pathPaymentStrictReceive -> actionKind 'transfer', riskClass SENSITIVE_EXECUTION, critical:false",
@@ -75,7 +77,7 @@
     {
       "id": "T2_GREEN_OPERATION_MAP",
       "title": "Implement stellarOperationMap.ts",
-      "status": "pending",
+      "status": "completed",
       "description": "Create the static operation->actionKind+riskClass table with critical flags and additive context flags, plus mapStellarOperation with a fail-closed default. Reuse TOOL_RISK_CLASSES from the shared contracts; introduce no new decision types.",
       "filesPlanned": [
         "back/services/stellar/operations/stellarOperationMap.ts",
@@ -85,7 +87,7 @@
     {
       "id": "T3_RED_POLICY_CONTEXT",
       "title": "Add RED tests for Stellar policy-context derivation",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests for deriveStellarPolicyContext: single-payment context fields, additive flag merging, and multi-operation escalation when any operation is critical.",
       "testsSpec": [
         "single payment -> context with amount_usd, recipient_address, recipient_known derived from the decoded operation",
@@ -98,7 +100,7 @@
     {
       "id": "T4_GREEN_POLICY_CONTEXT",
       "title": "Implement stellarPolicyContext.ts",
-      "status": "pending",
+      "status": "completed",
       "description": "Create deriveStellarPolicyContext that aggregates decoded operations into the existing PolicyEvaluationContext shape, additively merges the changes_trustline / changes_signers flags, and escalates the whole envelope if any operation is critical. Read-only against Wave 2 decoded operations.",
       "filesPlanned": [
         "back/services/stellar/operations/stellarPolicyContext.ts",
@@ -108,7 +110,7 @@
     {
       "id": "T5_DECISION_DEMO_CASES",
       "title": "Add decision-only end-to-end tests against the unchanged policy engine",
-      "status": "pending",
+      "status": "completed",
       "description": "Wire the mapping outputs into the existing policy engine in tests and assert the four demo cases resolve correctly without modifying the brain.",
       "testsSpec": [
         "legit payment within policy to allowlisted recipient -> ALLOW",
@@ -120,7 +122,7 @@
     {
       "id": "T6_VALIDATE",
       "title": "Validate Wave 3 and pause for review",
-      "status": "pending",
+      "status": "completed",
       "description": "Run the full validation suite and confirm Solana stays green and the brain is untouched before review.",
       "validationCommands": [
         "npm run test:back",
@@ -130,5 +132,32 @@
     }
   ],
   "createdAt": "2026-06-25",
-  "updatedAt": "2026-06-25"
+  "updatedAt": "2026-06-25",
+  "implementationEvidence": {
+    "mode": "Pure mapping layer feeding the UNCHANGED policy engine; brain & Solana untouched",
+    "branch": "feature/stellar-wave-3-operation-mapping (stacked on wave-2 -> wave-1 -> wave-0)",
+    "filesAdded": [
+      "back/services/stellar/operations/stellarOperationMap.ts",
+      "back/services/stellar/operations/stellarPolicyContext.ts",
+      "back/services/stellar/operations/__tests__/stellarOperationMap.test.ts",
+      "back/services/stellar/operations/__tests__/stellarPolicyContext.test.ts",
+      "back/services/stellar/operations/__tests__/stellarDecisionDemo.test.ts"
+    ],
+    "filesEdited": [
+      "shared/types/policyContracts.ts (added optional flags changes_trustline/changes_signers to PolicyEvaluationContext.flags — additive; engine does not branch on them)"
+    ],
+    "commands": [
+      "npm run test:back -> 373 passed (40 files), incl. 19 new Wave 3 tests",
+      "npm run test:back -- back/services/stellar/operations -> 19 passed (incl. 5 decision-demo cases vs the real engine)",
+      "tsc --noEmit -> only the 1 PRE-EXISTING mcpProxyDispatcher error remains; zero new errors",
+      "eslint back/services/stellar shared/types/policyContracts.ts -> 0 problems"
+    ],
+    "deviations": [
+      "Engine-aware mapping: value-movement ops -> actionKind 'transfer' (engine evaluates amount/recipient). Critical config ops (changeTrust/setOptions/manage*) -> actionKind 'account_management', which the UNCHANGED engine routes to policy.default (=require_approval) => REQUIRE_HUMAN_APPROVAL (ESCALATE). The spec table said critical ops -> 'transfer'; that would hit TRANSFER_MISSING_AMOUNT -> REQUIRE_ADDITIONAL_CONTEXT (not ESCALATE), so 'account_management' is required for the AC to hold without touching the engine.",
+      "changes_trustline/changes_signers are descriptive/audit flags only (engine ignores them, by design). Escalation is driven by actionKind routing, NOT by reusing the existing blocked flags (authority_change maps to DENY in default policy, too strong).",
+      "Demo case 'DENY on non-authorized destination' is realized via policy.transfers.blocked_recipients (TRANSFER_BLOCKED_RECIPIENT). Unknown-but-not-blocked recipients ESCALATE (require_approval_for_unknown_recipient), an additional natural case.",
+      "deriveStellarPolicyContext takes { facts, operations, knownRecipients } (facts carry the Wave 2 amountUsd/recipient) rather than only { operations }; recipient_known comes from a caller allowlist signal, matching how the engine consumes the boolean.",
+      "Unmapped/future ops -> BLOCKED_UNKNOWN -> engine REQUIRE_ADDITIONAL_CONTEXT (fail-closed, never ALLOW)."
+    ]
+  }
 }

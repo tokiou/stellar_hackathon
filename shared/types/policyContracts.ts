@@ -132,6 +132,10 @@ export type PolicyEvaluationContext = {
 		unlimited_delegate?: boolean;
 		authority_change?: boolean;
 		suspicious_recipient?: boolean;
+		// Stellar Wave 3 — additive, chain-neutral descriptive flags. The engine
+		// does not branch on these; they are carried for audit (Wave 5).
+		changes_trustline?: boolean;
+		changes_signers?: boolean;
 	};
 };
 
