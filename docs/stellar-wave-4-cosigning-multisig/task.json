@@ -1,7 +1,7 @@
 {
   "id": "stellar-wave-4-cosigning-multisig",
   "title": "Stellar Wave 4 — Co-signing and multisig",
-  "status": "planned",
+  "status": "implemented_ready_for_verification",
   "branch": "feature/stellar-wave-4-cosigning-multisig",
   "baseBranch": "main",
   "goal": "Make Compass a policy-gated co-signer for Stellar. Add a multi-signer-aware co-signing contract that generalizes the single-signer SignerAdapter (NOT typed on VersionedTransaction; operates on a base64 TransactionEnvelope XDR string), and a Stellar co-signer implementing Wave 0's ChainAdapter.cosign + inspectAccount. Compass holds its OWN testnet keypair (additional signer, never the user's key), adds ONLY its signature on the brain's ALLOW, binds the envelope to the evaluated candidate, reads real signers/weights/thresholds from Horizon, and never submits. On DENY/ESCALATE Compass does not sign, so the account threshold is unmet and the network rejects the transaction. The brain stays untouched and the Solana single-signer path stays green. Testnet-only.",
@@ -73,7 +73,7 @@
     {
       "id": "T1_RED_COSIGN_CONTRACT",
       "title": "Add RED tests for the Stellar co-signing contract",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests asserting the multi-signer-aware CosignAdapter contract shape: it operates on a base64 EnvelopeXdr string (not VersionedTransaction), exposes getAddress, cosign, and inspectAccount, and exports the CosignResult refusal union. Assert no legacy/ import appears in any new Wave 4 file.",
       "testsSpec": [
         "A class implementing getAddress + cosign + inspectAccount satisfies CosignAdapter and compiles",
@@ -86,7 +86,7 @@
     {
       "id": "T2_GREEN_COSIGN_CONTRACT",
       "title": "Implement stellarCosignerContracts.ts",
-      "status": "pending",
+      "status": "completed",
       "description": "Create the multi-signer-aware contract that generalizes the single-signer SignerAdapter: EnvelopeXdr (base64 string), CosignCandidate (candidateId + fingerprint), CosignConfig, CosignResult discriminated union, and the CosignAdapter interface. Reuse CompassDecision from shared contracts and AccountSignerState from Wave 0. Keep types separate from behavior; introduce no new decision types.",
       "filesPlanned": [
         "back/services/stellar/signer/stellarCosignerContracts.ts"
@@ -95,7 +95,7 @@
     {
       "id": "T3_RED_COSIGN_BEHAVIOR",
       "title": "Add RED tests for cosign gating, binding, and testnet guard",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests for the Stellar co-signer: ALLOW adds only Compass's signature and preserves the user's, DENY/ESCALATE refuse with POLICY_NOT_ALLOWED, fingerprint mismatch refuses with ENVELOPE_CANDIDATE_MISMATCH, cosign never submits, env-gate and mainnet guard, and seed non-exposure.",
       "testsSpec": [
         "cosign with decision ALLOW and matching fingerprint returns ok:true with exactly one added (Compass) signature, user signature preserved",
@@ -111,7 +111,7 @@
     {
       "id": "T4_GREEN_COSIGN_BEHAVIOR",
       "title": "Implement stellarCosigner.ts (cosign + inspectAccount)",
-      "status": "pending",
+      "status": "completed",
       "description": "Create the Stellar co-signer implementing Wave 0's ChainAdapter.cosign and inspectAccount. cosign: env/network guard, decode envelope (Wave 2), compute fingerprint and bind to candidate, gate on ALLOW, add ONLY Compass's testnet signature, return augmented base64 XDR, never submit. inspectAccount: read signers/weights/low-med-high thresholds from Horizon (Wave 1) into AccountSignerState. Compass keypair behind COMPASS_STELLAR_SIGNER_ENABLED, testnet-only.",
       "filesPlanned": [
         "back/services/stellar/signer/stellarCosigner.ts",
@@ -121,7 +121,7 @@
     {
       "id": "T5_RED_INSPECT_ACCOUNT",
       "title": "Add RED tests for inspectAccount multisig read",
-      "status": "pending",
+      "status": "completed",
       "description": "Write failing tests asserting inspectAccount maps Horizon signers/weights/thresholds into AccountSignerState and that, given the demo configuration, the threshold is unmet without Compass's weight.",
       "testsSpec": [
         "inspectAccount maps Horizon signers (key + weight) into AccountSignerState",
@@ -133,7 +133,7 @@
     {
       "id": "T6_VALIDATE",
       "title": "Validate Wave 4 and pause for review",
-      "status": "pending",
+      "status": "completed",
       "description": "Run the full validation suite and confirm the brain is untouched, the Solana single-signer path stays green, and everything is testnet-only before review.",
       "validationCommands": [
         "npm run test:back",
@@ -143,5 +143,30 @@
     }
   ],
   "createdAt": "2026-06-25",
-  "updatedAt": "2026-06-25"
+  "updatedAt": "2026-06-25",
+  "implementationEvidence": {
+    "mode": "Policy-gated co-signer; multi-signer XDR; brain & Solana single-signer path untouched",
+    "branch": "feature/stellar-wave-4-cosigning-multisig (stacked on wave-3..0)",
+    "filesAdded": [
+      "back/services/stellar/signer/stellarCosignerContracts.ts",
+      "back/services/stellar/signer/stellarCosigner.ts",
+      "back/services/stellar/signer/__tests__/stellarCosigner.test.ts"
+    ],
+    "filesEdited": [
+      "back/services/stellar/stellarChainAdapter.ts (added neutral inspectAccount delegating to inspectStellarAccount)"
+    ],
+    "commands": [
+      "npm run test:back -> 385 passed (41 files), incl. 12 new Wave 4 tests",
+      "npm run test:back -- back/services/stellar/signer -> 12 passed",
+      "tsc --noEmit -> only the 1 PRE-EXISTING mcpProxyDispatcher error remains",
+      "eslint back/services/stellar -> 0 problems"
+    ],
+    "deviations": [
+      "Co-signing uses a Stellar-specific richer API (CompassStellarCosigner.cosign(request)) on a base64 TransactionEnvelope XDR string, NOT the neutral Wave 0 ChainAdapter.cosign(payload, signerRef) — the neutral signature cannot carry the brain's decision, and gating on ALLOW must live inside cosign. StellarChainAdapter implements the neutral inspectAccount; the gated cosign is the supported path.",
+      "Compass holds its own testnet keypair (COMPASS_STELLAR_SIGNER_ENABLED + COMPASS_STELLAR_SIGNER_SECRET), adds ONLY its signature, never submits, never touches the user key. Not configured -> COMPASS_SIGNER_NOT_CONFIGURED (fail-closed: no signature => threshold unmet => not executable). Mainnet passphrase -> COMPASS_SIGNER_MAINNET_FORBIDDEN.",
+      "Binding: sha256(envelopeXdr) compared against expectedEnvelopeFingerprint; mismatch -> ENVELOPE_CANDIDATE_MISMATCH, signs nothing.",
+      "Threshold demonstration assumes weight-1 signers (the Wave 6 demo setup): meetsThreshold(collectedSignatures, medThreshold). inspectAccount returns the medium threshold (gates payments) and signer keys via the neutral AccountSignerState; Horizon loader is injectable so tests run offline.",
+      "Real testnet submission and the on-network 'not executable without Compass' proof are exercised in Wave 6; Wave 4 unit-proves the gating, signature addition, binding, and threshold arithmetic."
+    ]
+  }
 }

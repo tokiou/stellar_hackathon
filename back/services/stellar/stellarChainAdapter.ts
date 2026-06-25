@@ -1,9 +1,11 @@
 import type {
+	AccountSignerState,
 	ChainAdapter,
 	ChainAuditMetadata,
 	SemanticFacts,
 } from "@shared/chainContracts";
 
+import { inspectStellarAccount } from "./signer/stellarCosigner";
 import { decodeStellarEnvelope } from "./transactions/stellarTransactionDecoder";
 import type { StellarDecodeResult } from "./transactions/stellarTransactionContracts";
 
@@ -30,6 +32,10 @@ export class StellarChainAdapter implements ChainAdapter {
 			);
 		}
 		return result.facts;
+	}
+
+	async inspectAccount(address: string): Promise<AccountSignerState> {
+		return inspectStellarAccount(address);
 	}
 
 	buildAuditMetadata(
