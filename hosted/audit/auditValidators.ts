@@ -5,11 +5,32 @@ import {
 	DEFAULT_AUDIT_QUERY_LIMIT,
 	MAX_AUDIT_QUERY_LIMIT,
 } from "@shared/auditContracts";
-import type { AuditEntry } from "@shared/evaluationContracts";
+import { AUDIT_LIFECYCLE_STATES, type AuditEntry } from "@shared/evaluationContracts";
 import {
 	isHostedDecision,
 	isHostedRiskLevel,
 } from "../evaluate/evaluationContracts";
+
+const VALID_CHAINS = new Set<string>(["solana", "stellar"]);
+const VALID_LIFECYCLES = new Set<string>(Object.values(AUDIT_LIFECYCLE_STATES));
+
+function optionalString(value: unknown): boolean {
+	return value === undefined || typeof value === "string";
+}
+
+function optionalFiniteNumber(value: unknown): boolean {
+	return (
+		value === undefined ||
+		(typeof value === "number" && Number.isFinite(value))
+	);
+}
+
+function optionalNonNegativeInteger(value: unknown): boolean {
+	return (
+		value === undefined ||
+		(typeof value === "number" && Number.isInteger(value) && value >= 0)
+	);
+}
 
 export function normalizeAuditQueryLimit(limit?: number): number {
 	if (typeof limit !== "number" || Number.isNaN(limit)) {
@@ -80,7 +101,23 @@ function isAuditEntry(value: unknown): value is AuditEntry {
 		isHostedRiskLevel(value.riskLevel) &&
 		Array.isArray(value.reasons) &&
 		value.reasons.every(isNonEmptyString) &&
-		isNonEmptyString(value.occurredAt)
+		isNonEmptyString(value.occurredAt) &&
+		// Stellar Wave 5: optional, additive fields — pass when absent, type-checked when present.
+		(value.chain === undefined ||
+			(typeof value.chain === "string" && VALID_CHAINS.has(value.chain))) &&
+		optionalString(value.network) &&
+		optionalString(value.sourceAccount) &&
+		optionalString(value.destination) &&
+		optionalString(value.asset) &&
+		optionalFiniteNumber(value.amount) &&
+		optionalNonNegativeInteger(value.requiredSigners) &&
+		optionalNonNegativeInteger(value.collectedSigners) &&
+		optionalNonNegativeInteger(value.threshold) &&
+		optionalString(value.txHash) &&
+		optionalString(value.networkError) &&
+		(value.lifecycle === undefined ||
+			(typeof value.lifecycle === "string" &&
+				VALID_LIFECYCLES.has(value.lifecycle)))
 	);
 }
 

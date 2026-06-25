@@ -1,7 +1,7 @@
 {
   "id": "stellar-wave-5-audit-trail-multisig",
   "title": "Stellar Wave 5 — Audit trail for multisig (additive signer evidence)",
-  "status": "planned",
+  "status": "implemented_ready_for_verification",
   "branch": "feature/stellar-wave-5-audit-trail-multisig",
   "baseBranch": "main",
   "goal": "Extend the persisted Compass audit trail so the multisig story is provable from the record alone. Add OPTIONAL, additive fields to the hosted-side AuditEntry (chain, network, sourceAccount, destination, asset, amount, requiredSigners, collectedSigners, threshold, txHash, networkError, lifecycle), and add a mapper that builds the extended metadata from Wave 0's ChainAuditMetadata plus Wave 4's co-signing result. Every new field is optional so existing Solana audit entries validate unchanged; the brain stays untouched.",
@@ -69,7 +69,7 @@
     {
       "id": "T1_RED_AUDIT_ENTRY_FIELDS",
       "title": "Add RED tests for additive AuditEntry fields and validator tolerance",
-      "status": "pending",
+      "status": "completed",
       "description": "Before implementation, write tests asserting: an entry with only the original fields validates (backward compatibility); an entry with the full set of new optional fields validates; an entry with an invalid present field (bad lifecycle, negative threshold, non-ChainId chain) fails validation; a pre-Wave-5 Solana entry round-trips through auditStore write/list unchanged.",
       "testsSpec": [
         "isAuditEntry returns true for an entry with only correlationId/auditRef/toolName/decision/riskLevel/reasons/occurredAt",
@@ -84,7 +84,7 @@
     {
       "id": "T2_GREEN_AUDIT_ENTRY_FIELDS",
       "title": "Add optional AuditEntry fields and the lifecycle const",
-      "status": "pending",
+      "status": "completed",
       "description": "Add AUDIT_LIFECYCLE_STATES const + AuditLifecycleState type and the OPTIONAL fields (chain, network, sourceAccount, destination, asset, amount, requiredSigners, collectedSigners, threshold, txHash, networkError, lifecycle) to AuditEntry. Keep types/contracts separate from behavior. Update auditValidators isAuditEntry to keep the original required-field checks and add guarded optional-field checks (pass when absent, validate when present).",
       "filesPlanned": [
         "shared/types/evaluationContracts.ts",
@@ -94,7 +94,7 @@
     {
       "id": "T3_RED_STELLAR_AUDIT_MAPPER",
       "title": "Add RED tests for the stellar audit metadata mapper",
-      "status": "pending",
+      "status": "completed",
       "description": "Write tests for buildStellarAuditMetadata before implementation, covering the deny/non-cosigned case, the cosigned/confirmed case, the submission-failure case, and the no-secret-leak guarantee.",
       "testsSpec": [
         "buildStellarAuditMetadata for a non-cosigned DENY yields collectedSigners < requiredSigners, sets threshold, and lifecycle DENIED",
@@ -108,7 +108,7 @@
     {
       "id": "T4_GREEN_STELLAR_AUDIT_MAPPER",
       "title": "Implement the stellar audit metadata mapper",
-      "status": "pending",
+      "status": "completed",
       "description": "Create back/services/stellar/audit/stellarAuditMetadata.ts. buildStellarAuditMetadata reads chain-neutral facts from Wave 0 ChainAuditMetadata and signer facts from the Wave 4 co-signing result, derives the lifecycle state, and returns only the optional AuditEntry extension fields. Never read or emit raw XDR or secret material.",
       "filesPlanned": [
         "back/services/stellar/audit/stellarAuditMetadata.ts",
@@ -118,7 +118,7 @@
     {
       "id": "T5_VALIDATE_REVIEW",
       "title": "Validate and pause for review",
-      "status": "pending",
+      "status": "completed",
       "description": "Run the full validation suite and stop for parent review. Confirm backward compatibility (Solana entries unchanged), the brain untouched, and no legacy imports before any later wave consumes the enriched audit record.",
       "validationCommands": [
         "npm run test:back",
@@ -128,5 +128,30 @@
     }
   ],
   "createdAt": "2026-06-25",
-  "updatedAt": "2026-06-25"
+  "updatedAt": "2026-06-25",
+  "implementationEvidence": {
+    "mode": "Additive, backward-compatible audit fields + mapper; brain & Solana untouched",
+    "branch": "feature/stellar-wave-5-audit-trail-multisig (stacked on wave-4..0)",
+    "filesAdded": [
+      "back/services/stellar/audit/stellarAuditMetadata.ts",
+      "back/services/stellar/audit/__tests__/stellarAuditMetadata.test.ts",
+      "hosted/audit/auditValidators.test.ts"
+    ],
+    "filesEdited": [
+      "shared/types/evaluationContracts.ts (AUDIT_LIFECYCLE_STATES const + AuditLifecycleState; 12 OPTIONAL additive fields on AuditEntry)",
+      "hosted/audit/auditValidators.ts (isAuditEntry: guarded optional checks — pass when absent, type-checked when present)"
+    ],
+    "commands": [
+      "npm run test:back -> 400 passed (43 files), incl. 15 new Wave 5 tests",
+      "npm run test:back -- back/services/stellar/audit hosted/audit -> 15 passed",
+      "tsc --noEmit -> only the 1 PRE-EXISTING mcpProxyDispatcher error remains",
+      "eslint back/services/stellar hosted/audit shared/types/evaluationContracts.ts -> 0 problems"
+    ],
+    "deviations": [
+      "All 12 new AuditEntry fields are OPTIONAL: chain (Wave 0 ChainId), network, sourceAccount, destination, asset, amount, requiredSigners, collectedSigners, threshold, txHash, networkError, lifecycle. Legacy Solana entries omit them and validate unchanged (verified via auditStore write/list round-trip).",
+      "Lifecycle derived (not free-form): denied -> DENIED; networkError -> REJECTED; txHash -> CONFIRMED; cosigned (no terminal) -> COSIGNED_BY_COMPASS; else PROPOSED. (SUBMITTED reserved for an explicit in-flight signal in Wave 6.)",
+      "Mapper carries only semantic facts (+ optional txHash); never raw XDR, tx bytes, or secret material. Full-XDR persistence deferred.",
+      "isAuditEntry keeps required-field checks unchanged; new checks are guarded so absent fields pass and present fields are validated (invalid chain/lifecycle/negative counts rejected)."
+    ]
+  }
 }

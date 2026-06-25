@@ -1,3 +1,5 @@
+import type { ChainId } from "./chainContracts";
+
 export const HOSTED_DECISIONS = {
 	ALLOW: "allow",
 	DENY: "deny",
@@ -33,6 +35,19 @@ export const AUDIT_ENTRY_OUTCOMES = {
 
 export type AuditEntryOutcome =
 	(typeof AUDIT_ENTRY_OUTCOMES)[keyof typeof AUDIT_ENTRY_OUTCOMES];
+
+// Stellar Wave 5 — lifecycle of a (multisig) action, recorded on the audit entry.
+export const AUDIT_LIFECYCLE_STATES = {
+	PROPOSED: "PROPOSED",
+	COSIGNED_BY_COMPASS: "COSIGNED_BY_COMPASS",
+	SUBMITTED: "SUBMITTED",
+	CONFIRMED: "CONFIRMED",
+	REJECTED: "REJECTED",
+	DENIED: "DENIED",
+} as const;
+
+export type AuditLifecycleState =
+	(typeof AUDIT_LIFECYCLE_STATES)[keyof typeof AUDIT_LIFECYCLE_STATES];
 
 export type EvaluateActionAgentContext = {
 	clientName?: string;
@@ -70,6 +85,7 @@ export type EvaluateActionResponse = {
 };
 
 export type AuditEntry = {
+	// --- existing required fields (UNCHANGED) ---
 	correlationId: string;
 	auditRef: string;
 	toolName: string;
@@ -78,6 +94,19 @@ export type AuditEntry = {
 	reasons: string[];
 	outcome?: AuditEntryOutcome;
 	occurredAt: string;
+	// --- Stellar Wave 5: optional, additive, backward-compatible fields ---
+	chain?: ChainId;
+	network?: string;
+	sourceAccount?: string;
+	destination?: string;
+	asset?: string;
+	amount?: number;
+	requiredSigners?: number;
+	collectedSigners?: number;
+	threshold?: number;
+	txHash?: string;
+	networkError?: string;
+	lifecycle?: AuditLifecycleState;
 };
 
 export type PolicySnapshot = {
