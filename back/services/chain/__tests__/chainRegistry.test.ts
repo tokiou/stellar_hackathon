@@ -58,8 +58,16 @@ describe("resolveChainAdapter", () => {
 		}
 	});
 
-	it("fails explicitly for an unregistered chain (no silent Solana fallback)", () => {
+	it("resolves Stellar to an adapter with chainId 'stellar' (registered in Wave 2)", () => {
 		const result = resolveChainAdapter("stellar");
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.adapter.chainId).toBe("stellar");
+		}
+	});
+
+	it("fails explicitly for an unregistered chain (no silent fallback)", () => {
+		const result = resolveChainAdapter("aptos" as unknown as ChainId);
 		expect(result).toEqual({
 			ok: false,
 			reason: "CHAIN_ADAPTER_NOT_REGISTERED",

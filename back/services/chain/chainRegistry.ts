@@ -1,6 +1,7 @@
 import type { ChainAdapter, ChainId } from "@shared/chainContracts";
 
 import { SolanaChainAdapter } from "./solana/solanaChainAdapter";
+import { StellarChainAdapter } from "../stellar/stellarChainAdapter";
 
 export type ResolveChainAdapterResult =
 	| { ok: true; adapter: ChainAdapter }
@@ -14,6 +15,7 @@ export type ResolveChainAdapterResult =
  */
 const ADAPTER_FACTORIES: Partial<Record<ChainId, () => ChainAdapter>> = {
 	solana: () => new SolanaChainAdapter(),
+	stellar: () => new StellarChainAdapter(),
 };
 
 export function resolveChainAdapter(
