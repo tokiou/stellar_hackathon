@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "compass-stellar": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "/home/tokiou/fran-proyects/stellar_hackathon/scripts/compass-stellar-mcp.sh"
+      ],
+      "env": {
+        "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org",
+        "COMPASS_HYBRID_GUARD_ENABLED": "false"
+      }
+    }
+  }
+}
