@@ -7,12 +7,20 @@
  * runtime from app credentials.
  */
 
+export interface PrivyCreatedWallet {
+	id: string;
+	address?: string; // Stellar G… address (preferred)
+	public_key?: string; // raw ed25519 hex (fallback to derive the address)
+}
+
 export interface PrivyWalletClient {
 	/** Returns a 64-byte Ed25519 signature for a 0x-hex hash. */
 	rawSign(
 		walletId: string,
 		input: { params: { hash: string } },
 	): Promise<{ signature: string } | string>;
+	/** Provisions a new server wallet (onboarding). Optional on the interface. */
+	create?(input: { chain_type: string; user_id?: string }): Promise<PrivyCreatedWallet>;
 }
 
 export type PrivyStellarConfig = {
@@ -51,6 +59,12 @@ export function createRealPrivyWalletClient(
 		async rawSign(walletId, input) {
 			const wallets = await getWallets();
 			return wallets.rawSign(walletId, input);
+		},
+		async create(input) {
+			const wallets = (await getWallets()) as unknown as {
+				create: (i: { chain_type: string; user_id?: string }) => Promise<PrivyCreatedWallet>;
+			};
+			return wallets.create(input);
 		},
 	};
 }

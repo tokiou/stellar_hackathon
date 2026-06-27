@@ -10,6 +10,15 @@
         "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org",
         "COMPASS_HYBRID_GUARD_ENABLED": "false"
       }
+    },
+    "stellar-onboarding": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd /home/tokiou/fran-proyects/stellar_hackathon && exec npx tsx scripts/stellar-onboarding-mcp.mjs"
+      ],
+      "env": {}
     }
   }
 }
