@@ -1,42 +1,57 @@
 # Compass
 
-Compass is the **execution firewall for AI agents on Solana**.
+Compass is the **execution firewall for AI agents on Stellar**.
 
-It sits between AI agents, MCP tools, wallets, and on-chain protocols. Before any sensitive crypto action is signed or executed, Compass validates intent, classifies the tool call, applies policy, simulates or decodes the transaction when needed, asks for human approval when required, and records the decision in an audit trail.
+It sits between AI agents, MCP tools, wallets, and the Stellar network. Before any sensitive operation is signed or executed, Compass decodes the transaction, classifies the operation, applies policy, optionally consults an LLM judge, asks for human approval when required, and records the decision in an audit trail.
 
-Compass is **not** another AI wallet. Wallets control signing. Compass controls whether an agent action should reach signing at all.
+Compass is **not** another AI wallet. Wallets control signing. Compass decides **whether an agent action should reach signing at all** — and, as a **policy-gated co-signer**, it enforces that decision cryptographically using **Stellar's native multisig**: if Compass does not add its signature, the account threshold is not met and the network rejects the transaction. No custody, no bypass.
 
-## Repository Shape
+## Why Stellar
+
+The policy gate is enforced by the ledger itself. The account is configured (via `setOptions`) so that the user and Compass are both required signers (master weight 1 + Compass weight 1, medium threshold 2). A transaction the user signs but Compass refuses to co-sign is **rejected by the network** (`tx_bad_auth`) — there is no separate enforcement contract to deploy and nothing to bypass.
+
+## Architecture
+
+Two layers, cleanly separated:
+
+- **The chain-agnostic brain** — MCP proxy with policy interceptor, LLM judge with sanitizer, deterministic policy engine, audit trail, and the `ALLOW / DENY / ESCALATE` decision contract. It consumes neutral facts; it never parses XDR or touches keys.
+- **The Stellar layer** (`back/services/stellar/`) — Horizon/Soroban connectivity, XDR → semantic-facts decoder, operation→risk mapping, the policy-gated co-signer, and multisig audit metadata. It plugs into the brain through a neutral `ChainAdapter` boundary.
+
+The decision maps onto the signature:
+
+| Decision | Co-signer behavior | On-network outcome |
+|----------|--------------------|--------------------|
+| **ALLOW** | Compass adds its signature | threshold met → executes |
+| **DENY** | Compass does not sign | threshold unmet → tx dead |
+| **ESCALATE** | Compass withholds for human review | not executable until approved |
+
+## Repository shape
 
 ```
 compass/
-├── app/                  # Next.js landing page entrypoints
-├── api/hosted/           # Vercel serverless entrypoint for hosted backend
-├── back/
-│   ├── guardrail/        # Execution gateway, policy, redaction, debug logger
-│   ├── services/
-│   │   ├── mcp/          # MCP proxy server (server/, proxy/, config/)
-│   │   ├── domains/      # Transfer, swap, conditional gateways
-│   │   └── support/      # Signer adapter
-│   └── solana/           # Anchor programs (deployed on-chain)
-├── hosted/               # Hosted backend (Hono app, evaluation, audit, LLM, policy)
-├── shared/types/         # Shared contracts between back and hosted
-├── scripts/              # Utilities (ticket orchestrator, test helpers)
-├── docs/                 # Product specs, proposals, task plans
-├── tickets/              # SDD ticket files
-├── vercel.json           # Vercel rewrites for hosted backend
-├── package.json
-├── tsconfig.json
-└── vitest.back.config.ts
+├── back/services/
+│   ├── chain/            # Neutral ChainAdapter boundary + registry
+│   ├── stellar/          # Stellar layer:
+│   │   ├── providers/    #   Horizon/Soroban connection, network config, Friendbot
+│   │   ├── transactions/ #   XDR decoder, stroop amounts
+│   │   ├── operations/   #   operation → actionKind/riskClass mapping + policy context
+│   │   ├── signer/        #   policy-gated co-signer (local + Privy) + provisioning
+│   │   ├── audit/        #   multisig audit metadata
+│   │   └── demo/         #   guard pipeline + multisig setup
+│   └── mcp/              # MCP proxy server (chain-agnostic)
+├── hosted/               # Hosted backend: evaluation, policy engine, judge, audit
+├── shared/types/         # Neutral contracts (chain, decision, policy, audit)
+├── scripts/              # Demos, MCP launcher, Privy setup
+└── docs/                 # Specs (stellar-wave-0..7, stellar-privy-signer)
 ```
 
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
 - Node.js 18+
-- [Bun](https://bun.sh) (for the hosted backend runtime)
 - Git
+- Public internet access to Stellar Testnet (Horizon + Friendbot). No real funds — Friendbot funds test accounts.
 
 ### Setup
 
@@ -47,206 +62,171 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and fill at minimum:
-
-- `SOLANA_RPC_URL` — defaults to devnet
-- `AGENT_ACTION_GUARD_PROGRAM_ID` — the deployed Anchor program ID
-- `COMPASS_HOSTED_API_KEY` — any string for local auth
-
-### Run the Hosted Backend Locally
+The Stellar defaults already point at Testnet; you only need to set the network passphrase (and a signer if you want Compass to co-sign — see **Signer providers**).
 
 ```sh
-npm run hosted:dev
+export STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 ```
 
-Verify it's alive:
+### Run the end-to-end demo on Testnet
+
+Drives the full thesis: create + fund an account via Friendbot, configure native multisig, and run the demo cases (ALLOW executes, DENY/ESCALATE are rejected).
 
 ```sh
-curl localhost:3001/health
-# {"status":"ok","timestamp":"..."}
+npx tsx scripts/stellar-demo.mjs
 ```
 
-### Run the MCP Server Locally
+### Run tests
 
 ```sh
-npm run mcp:dev
+npm run test:back
 ```
 
-The MCP server communicates over stdio and requires a downstream MCP server configured. See `back/services/mcp/config/` for configuration.
+## Signer providers (how Compass co-signs)
 
-### Install Compass MCP With npx
+Compass needs **its own** Stellar key to co-sign (it never holds the user's key). Choose the provider with `COMPASS_STELLAR_SIGNER_PROVIDER`. **It is optional and defaults to `local`** — with no signer configured, Compass still evaluates and decides; it simply cannot add a signature (fail-closed: the multisig threshold stays unmet).
 
-After the npm package is published, users can run Compass without cloning this repository.
+### `local` (default) — key from env
 
-Add this MCP entry to your client config:
+```sh
+export COMPASS_STELLAR_SIGNER_PROVIDER=local      # default; can be omitted
+export COMPASS_STELLAR_SIGNER_ENABLED=true
+export COMPASS_STELLAR_SIGNER_SECRET=S...          # Compass testnet secret seed
+```
+
+### `privy` (optional) — key custodied by Privy
+
+Compass's co-signing key lives in a Privy server wallet (TEE-isolated); Compass signs by calling Privy's raw-sign API and never sees the secret.
+
+1. Get `PRIVY_APP_ID` + `PRIVY_APP_SECRET` from https://dashboard.privy.io (enable Server Wallets).
+2. Create the wallet + authorization key in one command:
+
+   ```sh
+   PRIVY_APP_ID=... PRIVY_APP_SECRET=... npx tsx scripts/privy-setup.mjs
+   ```
+
+   It prints the env block to paste:
+
+   ```sh
+   export COMPASS_STELLAR_SIGNER_PROVIDER=privy
+   export PRIVY_APP_ID=...
+   export PRIVY_APP_SECRET=...
+   export COMPASS_STELLAR_PRIVY_WALLET_ID=...
+   export COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY=G...
+   export PRIVY_AUTHORIZATION_KEY='...'    # P-256 key, keep secret
+   ```
+
+3. Verify Compass co-signs via real Privy on Testnet:
+
+   ```sh
+   npx tsx scripts/stellar-privy-cosign-demo.mjs
+   # ALLOW  -> Privy signs -> executable
+   # ESCALATE -> Privy does not sign -> rejected (tx_bad_auth)
+   ```
+
+Privy can also **provision** the agent's Stellar wallet (onboarding): `npx tsx scripts/stellar-privy-provision.mjs` (real Privy when credentials are set, otherwise a simulated wallet for validation).
+
+## Run as an MCP firewall (with Claude or any MCP client)
+
+Compass is an MCP **proxy**: it wraps a downstream Stellar MCP server and gates every tool call. A ready launcher wraps the public [`stellar-mcp`](https://www.npmjs.com/package/stellar-mcp) server:
 
 ```json
 {
   "mcpServers": {
-    "compass": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@ramadan04/compass-mcp-guard",
-        "--downstream-name",
-        "solana-tools",
-        "--downstream-command",
-        "npx",
-        "--downstream-args-json",
-        "[\"@your-downstream/mcp-server\"]"
-      ],
+    "compass-stellar": {
+      "command": "bash",
+      "args": ["/absolute/path/compass/scripts/compass-stellar-mcp.sh"],
       "env": {
-        "COMPASS_HYBRID_GUARD_ENABLED": "true",
-        "COMPASS_HOSTED_API_URL": "https://your-vercel-preview.vercel.app/api/hosted",
-        "COMPASS_HOSTED_API_KEY": "your-hosted-api-key"
+        "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org",
+        "COMPASS_HYBRID_GUARD_ENABLED": "false"
       }
     }
   }
 }
 ```
 
-Replace `@your-downstream/mcp-server` with the MCP server Compass should protect.
+Then ask the agent things like *"get the balance of G…"* (allowed, forwarded) vs *"send a payment"* / *"change a trustline"* (gated by Compass). The proxy core is chain-agnostic; pointing it at a different downstream is a config change.
 
-For the current verified preview, use:
+> The proxy prefilter classifies by tool name. Fine-grained per-amount / per-recipient decisions (ALLOW/DENY/ESCALATE) run in the guard pipeline (`runStellarGuard`) and the hosted backend; with the hosted backend disabled, mutating tools are denied fail-closed.
 
-```txt
-COMPASS_HOSTED_API_URL=https://solanahackathon-qf8nkder5-ramirocshubs-projects.vercel.app/api/hosted
-```
+## Environment variables
 
-Do not hardcode real API keys in committed config files. Use your MCP client's secret/env handling when available.
+Copy `.env.example` to `.env.local`. Stellar URLs default to Testnet.
 
-### Run Tests
-
-```sh
-npm run test:back
-```
-
-Full E2E user flow:
-
-```sh
-node scripts/test-user-flow.mjs
-```
-
-## Environment Variables
-
-Copy `.env.example` to `.env.local` and set values for your environment.
-
-### Solana
+### Stellar network
 
 | Variable | Description |
 |----------|-------------|
-| `SOLANA_RPC_URL` | Solana RPC endpoint (default: `https://api.devnet.solana.com`) |
-| `AGENT_ACTION_GUARD_PROGRAM_ID` | On-chain Anchor program ID for action guard |
-| `WALLET_SAFETY_ATTESTOR_SECRET_KEY_FILE` | Path to wallet safety attestor keypair file |
-| `WALLET_SAFETY_ATTESTOR_SECRET_KEY` | Wallet safety attestor secret key (base58) |
-| `COMPASS_LOCAL_SIGNER_ENABLED` | Enable local signer for devnet demo |
-| `COMPASS_LOCAL_SIGNER_SECRET_KEY` | Local signer secret key (base58) |
-| `COMPASS_LOCAL_SIGNER_PUBLIC_KEY` | Local signer public key (optional validation) |
+| `STELLAR_NETWORK` | `testnet` (testnet-only; a mainnet passphrase is rejected) |
+| `STELLAR_NETWORK_PASSPHRASE` | required — `Test SDF Network ; September 2015` |
+| `STELLAR_HORIZON_URL` | Horizon endpoint (default Testnet) |
+| `STELLAR_RPC_URL` | Soroban RPC endpoint (default Testnet) |
+| `STELLAR_FRIENDBOT_URL` | Friendbot funding endpoint (default Testnet) |
+| `FALLBACK_XLM_USD_PRICE` | Stub XLM/USD price for amount thresholds (default `0.1`) |
 
-### Hosted Backend
-
-| Variable | Description |
-|----------|-------------|
-| `COMPASS_HOSTED_PORT` | Port for the hosted backend (default: `3001`) |
-| `COMPASS_HOSTED_API_KEY` | API key for local hosted backend auth |
-
-### Hybrid Guard
+### Co-signer (optional)
 
 | Variable | Description |
 |----------|-------------|
-| `COMPASS_HYBRID_GUARD_ENABLED` | Enable hybrid guard (local MCP + hosted backend, default: `true`) |
-| `COMPASS_HOSTED_API_URL` | URL of the hosted backend (default: `http://localhost:3001`) |
-| `COMPASS_HOSTED_TIMEOUT_MS` | Timeout for hosted backend calls (default: `5000`) |
+| `COMPASS_STELLAR_SIGNER_PROVIDER` | `local` (default) or `privy` |
+| `COMPASS_STELLAR_SIGNER_ENABLED` | enable the local signer (`local` provider) |
+| `COMPASS_STELLAR_SIGNER_SECRET` | Compass testnet secret seed (`local` provider) |
+| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Privy app credentials (`privy` provider) |
+| `COMPASS_STELLAR_PRIVY_WALLET_ID` | Privy server wallet id (`privy` provider) |
+| `COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY` | the wallet's Stellar `G…` address |
+| `PRIVY_AUTHORIZATION_KEY` | P-256 authorization key to authorize raw-sign (secret) |
 
-### LLM Judge
-
-| Variable | Description |
-|----------|-------------|
-| `COMPASS_LLM_DECISION_ENABLED` | Enable optional advisory LLM judge (default: `false`) |
-| `COMPASS_LLM_PROVIDER` | LLM provider (default: `opencode-go`) |
-| `COMPASS_LLM_MODEL` | Model name (default: `kimi-k2.5`) |
-| `COMPASS_LLM_BASE_URL` | Chat completions endpoint URL |
-| `COMPASS_LLM_API_KEY` | API key for the LLM provider (required for OpenAI) |
-| `COMPASS_LLM_TIMEOUT_MS` | Timeout for LLM calls (default: `3000`) |
-
-### LLM Router
+### Hosted backend / hybrid guard
 
 | Variable | Description |
 |----------|-------------|
-| `COMPASS_LLM_ROUTER_ENABLED` | Enable tool call classification router (default: `false`) |
-| `COMPASS_LLM_ROUTER_TIMEOUT_MS` | Timeout for router calls (default: `10000`) |
+| `COMPASS_HOSTED_PORT` | hosted backend port (default `3001`) |
+| `COMPASS_HOSTED_API_KEY` | API key for local hosted auth |
+| `COMPASS_HYBRID_GUARD_ENABLED` | run mutating calls through the hosted policy engine (default `true`) |
+| `COMPASS_HOSTED_API_URL` | hosted backend URL (default `http://localhost:3001`) |
 
-### Analytics
+### LLM judge / router (optional, advisory)
 
 | Variable | Description |
 |----------|-------------|
-| `POSTHOG_API_KEY` | PostHog project API key for server-side events |
-| `POSTHOG_HOST` | PostHog host (default: `https://us.i.posthog.com`) |
-| `COMPASS_INSTALLATION_ID` | Installation identifier for analytics correlation |
+| `COMPASS_LLM_DECISION_ENABLED` | enable the optional advisory LLM judge (default `false`) |
+| `COMPASS_LLM_ROUTER_ENABLED` | enable tool-call classification router (default `false`) |
 
 ### Debug
 
 | Variable | Description |
 |----------|-------------|
-| `COMPASS_DEBUG` | Comma-separated debug modules: `proxy`, `policy`, `gateway`, `execution`, `interceptor`, `llm`, `signer`, `connection`, `audit` |
-
-### Price / Fallback
-
-| Variable | Description |
-|----------|-------------|
-| `FALLBACK_SOL_USD_PRICE` | Fallback SOL price when on-chain quote is unavailable (default: `140`) |
+| `COMPASS_DEBUG` | comma-separated modules: `proxy`, `policy`, `gateway`, `execution`, `interceptor`, `llm`, `signer`, `connection`, `audit` |
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Run the Next.js app (landing page) |
-| `npm run build` | Production build for Next.js |
-| `npm run start` | Start the production Next.js server |
-| `npm run lint` | Lint `app`, `back`, `hosted`, and `shared` |
-| `npm run test:back` | Run backend test suite (vitest) |
-| `npm run test:watch` | Run backend tests in watch mode |
-| `npm run hosted:dev` | Start the hosted Hono backend via Bun |
-| `npm run mcp:dev` | Start the Compass MCP server (stdio) |
-| `npm run mcp:install:opencode` | Install Compass as an OpenCode MCP tool |
-| `npm run test:e2e` | Run E2E pipeline tests |
-| `npm run test:e2e:verbose` | Run E2E pipeline tests with verbose output |
-| `npm run ticket:process` | Process a pending SDD ticket |
-| `npm run ticket:approve` | Approve a pending SDD ticket |
-| `npm run ticket:status` | Show SDD ticket status |
+| `npx tsx scripts/stellar-demo.mjs` | Full Testnet demo: fund → multisig → run cases |
+| `npx tsx scripts/stellar-privy-cosign-demo.mjs` | Mode B co-signer demo (real Privy if configured) |
+| `npx tsx scripts/privy-setup.mjs` | One-time real Privy wallet + authorization key setup |
+| `npx tsx scripts/stellar-privy-provision.mjs` | Provision (onboard) an agent's Stellar wallet via Privy |
+| `npm run test:back` | Backend test suite (vitest) |
+| `npm run mcp:dev` | Start the Compass MCP proxy (stdio) |
 
-## Testing
+## Demo cases
 
-- **Unit / integration tests**: `npm run test:back` — runs vitest against `back/` and `hosted/`.
-- **E2E user flow**: `node scripts/test-user-flow.mjs` — simulates a complete user interaction.
-- **E2E pipeline**: `npm run test:e2e` — runs the full pipeline test suite.
-- **Stdio note**: Tests that spawn MCP stdio processes can be flaky when run in parallel. If you see intermittent failures, try running tests sequentially or rerun the failed suite.
+1. Legit payment within policy → **ALLOW** (Compass co-signs, executes on Testnet)
+2. Payment to a non-authorized destination → **DENY**
+3. Amount out of range → **ESCALATE**
+4. Critical operation (`setOptions` / `changeTrust`) → **ESCALATE**
+5. User signs but Compass does not → **not executable** (network rejects)
+6. User + Compass sign → **executable**
 
-## Deployment
+## Security rules
 
-| Component | Target | How |
-|-----------|--------|-----|
-| Hosted backend | Vercel | `api/hosted/[[...route]].ts` serverless entrypoint + `vercel.json` rewrites. Deploy via Vercel CLI or git push. |
-| MCP server | Local (stdio) | User runs `npm run mcp:dev`. Connects to downstream MCP servers via stdio. |
-| Landing page | Vercel (same project) | Next.js app at root. The landing is a separate concern from the hosted API. |
-| Anchor programs | Solana | `anchor deploy` from `back/solana/`. Deployed program ID set via `AGENT_ACTION_GUARD_PROGRAM_ID`. |
+- Sensitive operations must pass the policy gate before Compass co-signs.
+- Missing evidence, unsafe policy state, or unverifiable high-risk actions fail closed (no signature → threshold unmet → not executable).
+- Compass never holds the user's private key. With the `privy` provider, Compass never holds its own key either — Privy custodies it.
+- Testnet-only: a mainnet network passphrase is rejected.
 
-## Security Rules
+## Source of truth
 
-- Critical operations must pass backend guardrails before signing/execution.
-- `sign_and_send_transaction` style flows must be denied unless Compass built and approved the transaction.
-- Missing evidence, unsafe policy state, or unverifiable high-risk actions must fail closed.
-- The Compass backend must not hold or expose user private keys.
-
-## Branch Policy
-
-| Branch | Purpose |
-|--------|---------|
-| `main` | Stable. No migration work merges here without explicit approval. |
-| `release/compass_migration` | Integration branch for the MCP Guard migration. |
-| `feature/wave-<n>-<description>` | Per-feature branches. Branch from and merge back into `release/compass_migration`. |
-
-## Source Of Truth
-
+- [`docs/stellar-support/`](docs/stellar-support/) — Stellar wave track overview and specs.
+- [`docs/stellar-privy-signer/`](docs/stellar-privy-signer/) — Privy co-signer, provisioning, and test guides.
 - [`docs/PRODUCT_CONSTITUTION.md`](docs/PRODUCT_CONSTITUTION.md) — canonical product document.
-- [`docs/`](docs/) — feature specs, technical designs, task plans.
