@@ -1,0 +1,138 @@
+{
+  "id": "stellar-privy-signer",
+  "title": "Stellar Privy signer — Privy-custodied co-signer (additive to Wave 4)",
+  "status": "implemented_ready_for_verification",
+  "branch": "feature/stellar-privy-signer",
+  "baseBranch": "main",
+  "goal": "Add a Privy-custodied co-signer (PrivyStellarCosigner) implementing the Wave 4 CompassStellarCosigner contract via Privy server-wallet raw-sign (Ed25519), selectable with COMPASS_STELLAR_SIGNER_PROVIDER=local|privy. Same policy gate, binding, testnet guard, and fail-closed config as Wave 4; the co-signer key is custodied by Privy and never held by Compass.",
+  "dependsOn": [
+    "stellar-wave-4-cosigning-multisig"
+  ],
+  "context": {
+    "analysisSource": "PRODUCT_CONSTITUTION.md names a PrivyAdapter as the intended production signer. Wave 4 proved the co-signer with a raw local seed (COMPASS_STELLAR_SIGNER_SECRET). Privy supports Stellar via Ed25519 raw-sign: privy.wallets().rawSign(walletId, { params: { hash } }) using @privy-io/node and PrivyClient({ appId, appSecret }).",
+    "precedent": "docs/stellar-wave-4-cosigning-multisig/",
+    "relatedCode": [
+      "back/services/stellar/signer/stellarCosignerContracts.ts",
+      "back/services/stellar/signer/stellarCosigner.ts",
+      "back/services/stellar/demo/stellarGuardPipeline.ts"
+    ]
+  },
+  "openQuestions": [
+    {
+      "id": "Q1",
+      "question": "Fetch the wallet public key from Privy at runtime, or configure it?",
+      "resolution": "DECIDED: Configure it via COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY. The public key is not secret, configuring it avoids an extra API round-trip per cosign, and it keeps the adapter offline-testable."
+    },
+    {
+      "id": "Q2",
+      "question": "Hard-depend on @privy-io/node, or structurally type the client?",
+      "resolution": "DECIDED: Define a minimal structural PrivyWalletClient interface and inject it; a lazy factory builds the real @privy-io/node client at runtime. Tests inject a fake client so they need no Privy package or credentials."
+    }
+  ],
+  "acceptanceCriteria": [
+    "PrivyStellarCosigner satisfies CompassStellarCosigner and is selectable via COMPASS_STELLAR_SIGNER_PROVIDER=privy (default local).",
+    "The attached signature is a valid Stellar Ed25519 signature over tx.hash() for the configured wallet public key (verifiable by the Stellar SDK).",
+    "Gating (ALLOW-only), envelope-to-candidate binding, testnet-only guard, and fail-closed config behave exactly as the Wave 4 local signer.",
+    "The Privy app secret never appears in any CosignResult, audit metadata, or log.",
+    "The brain and Solana are untouched; existing tests stay green.",
+    "No legacy/ imports are introduced."
+  ],
+  "nonGoals": [
+    "No change to Wave 4 local signer behavior (Privy is additive/opt-in).",
+    "No Privy user-side embedded wallet / login flow.",
+    "No EVM/Solana Privy signer.",
+    "No mainnet readiness.",
+    "No real Privy network call in CI (manual, like the Wave 6 testnet run)."
+  ],
+  "verification": [
+    "npm run test:back",
+    "npm run lint",
+    "npx tsc --noEmit --pretty false",
+    "Manual: with a real Privy app + Stellar server wallet, COMPASS_STELLAR_SIGNER_PROVIDER=privy, run scripts/stellar-demo.mjs and confirm Compass co-signs via Privy on ALLOW cases."
+  ],
+  "tasks": [
+    {
+      "id": "T1_RED_PRIVY_COSIGNER",
+      "title": "Add RED tests for the Privy co-signer",
+      "status": "completed",
+      "description": "Write tests, before implementation, mocking the Privy client with a real Ed25519 keypair and asserting a valid attached signature, ALLOW-only gating, binding, fail-closed config, mainnet refusal, and secret non-exposure.",
+      "testsSpec": [
+        "rawSign mock (real Ed25519) -> attached signature verifies against the wallet public key over tx.hash()",
+        "non-ALLOW decision -> POLICY_NOT_ALLOWED and rawSign not called",
+        "fingerprint mismatch -> ENVELOPE_CANDIDATE_MISMATCH and rawSign not called",
+        "missing any PRIVY_* var -> COMPASS_SIGNER_NOT_CONFIGURED",
+        "mainnet passphrase -> COMPASS_SIGNER_MAINNET_FORBIDDEN",
+        "JSON.stringify(result) contains no app secret",
+        "no legacy/ import in new files"
+      ]
+    },
+    {
+      "id": "T2_GREEN_PRIVY_CLIENT",
+      "title": "Implement the Privy client interface + lazy factory",
+      "status": "completed",
+      "description": "Create privyClient.ts: structural PrivyWalletClient interface and a lazy factory that builds the real @privy-io/node client from PRIVY_APP_ID/PRIVY_APP_SECRET when not injected.",
+      "filesPlanned": [
+        "back/services/stellar/signer/privyClient.ts"
+      ]
+    },
+    {
+      "id": "T3_GREEN_PRIVY_COSIGNER",
+      "title": "Implement PrivyStellarCosigner",
+      "status": "completed",
+      "description": "Create privyStellarCosigner.ts implementing CompassStellarCosigner: gate on ALLOW, enforce binding, resolve config (fail-closed + mainnet guard), raw-sign tx.hash() via Privy, attach with tx.addSignature, return XDR.",
+      "filesPlanned": [
+        "back/services/stellar/signer/privyStellarCosigner.ts"
+      ]
+    },
+    {
+      "id": "T4_GREEN_FACTORY",
+      "title": "Implement the provider selector",
+      "status": "completed",
+      "description": "Create stellarCosignerFactory.ts: resolveStellarCosigner(env, deps) returning local (Wave 4) or privy by COMPASS_STELLAR_SIGNER_PROVIDER; default local. Add the env vars to .env.example.",
+      "filesPlanned": [
+        "back/services/stellar/signer/stellarCosignerFactory.ts",
+        ".env.example"
+      ]
+    },
+    {
+      "id": "T5_VALIDATE",
+      "title": "Validate and pause for review",
+      "status": "completed",
+      "description": "Run the full validation suite; confirm the brain and Solana are untouched and all existing tests stay green.",
+      "testsSpec": [
+        "npm run test:back",
+        "npm run lint",
+        "npx tsc --noEmit --pretty false"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-27",
+  "updatedAt": "2026-06-27",
+  "implementationEvidence": {
+    "mode": "Privy-custodied co-signer; additive to Wave 4; brain & Solana untouched",
+    "branch": "feature/stellar-privy-signer (from main)",
+    "dependencyAdded": "@privy-io/node ^0.23.0 (PrivyClient; wallets().rawSign Ed25519)",
+    "filesAdded": [
+      "back/services/stellar/signer/privyClient.ts",
+      "back/services/stellar/signer/privyStellarCosigner.ts",
+      "back/services/stellar/signer/stellarCosignerFactory.ts",
+      "back/services/stellar/signer/__tests__/privyStellarCosigner.test.ts"
+    ],
+    "filesEdited": [
+      ".env.example (COMPASS_STELLAR_SIGNER_PROVIDER + PRIVY_* + wallet vars)"
+    ],
+    "commands": [
+      "npm run test:back -> 419 passed (46 files), incl. 9 new Privy tests",
+      "npm run test:back -- back/services/stellar/signer -> 21 passed (12 Wave4 + 9 Privy)",
+      "tsc --noEmit -> only the 1 PRE-EXISTING mcpProxyDispatcher error remains",
+      "eslint back/services/stellar -> 0 problems"
+    ],
+    "deviations": [
+      "PrivyStellarCosigner implements the SAME Wave 4 CompassStellarCosigner contract; only the signing step differs (Privy raw-sign of tx.hash() Ed25519, attached via tx.addSignature). Gate/binding/testnet-guard/fail-closed reused from Wave 4.",
+      "The key Privy test backs the rawSign mock with a REAL Ed25519 keypair, so the attached signature genuinely verifies (2 sigs on the tx, Privy hint present) — not a stub.",
+      "@privy-io/node imported via dynamic import() inside a lazy factory (eslint no-require-imports compliant); tests inject a fake client and never load the package.",
+      "Wallet public key is configured (COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY), not fetched, to avoid an extra round-trip and keep the adapter offline-testable.",
+      "Real Privy network call needs a Privy app + Stellar server wallet; kept manual (like the Wave 6 testnet run), not in CI."
+    ]
+  }
+}
