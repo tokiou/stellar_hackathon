@@ -40,3 +40,15 @@ npx tsx scripts/stellar-privy-cosign-demo.mjs
 
 The full six-case demo also honors the provider switch:
 `COMPASS_STELLAR_SIGNER_PROVIDER=privy npx tsx scripts/stellar-demo.mjs` (with the same PRIVY_* env).
+
+## VERIFIED with REAL Privy (2026-06-27)
+
+Ran `scripts/privy-setup.mjs` against a real Privy app → created a real Stellar server wallet,
+then `scripts/stellar-privy-cosign-demo.mjs` with `COMPASS_STELLAR_SIGNER_PROVIDER=privy`:
+
+- Privy mode: **real**. Compass signer = the Privy server wallet (key in Privy's TEE).
+- CASE 1 ALLOW → Privy signed=true → **executable** on Testnet.
+- CASE 2 ESCALATE → Privy signed=false → **rejected (tx_bad_auth)**.
+
+Privy is OPTIONAL: `COMPASS_STELLAR_SIGNER_PROVIDER` defaults to `local`. With no Privy env the
+system uses the local signer (or simulated provisioning) and nothing breaks.
