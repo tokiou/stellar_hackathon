@@ -33,7 +33,7 @@ import {
 	getHorizonServer,
 } from "../back/services/stellar/providers/stellarConnection";
 import { getStellarNetworkConfig } from "../back/services/stellar/providers/stellarNetworkConfig";
-import { createStellarCosigner } from "../back/services/stellar/signer/stellarCosigner";
+import { resolveStellarCosigner } from "../back/services/stellar/signer/stellarCosignerFactory";
 import {
 	assertCompassRequired,
 	buildMultisigSetupEnvelope,
@@ -52,7 +52,8 @@ function log(msg) {
 
 async function main() {
 	const config = getStellarNetworkConfig();
-	const cosigner = createStellarCosigner();
+	// Honors COMPASS_STELLAR_SIGNER_PROVIDER=local|privy.
+	const cosigner = resolveStellarCosigner();
 	const compassPublicKey = cosigner.getPublicKey();
 	if (!compassPublicKey) {
 		throw new Error(
