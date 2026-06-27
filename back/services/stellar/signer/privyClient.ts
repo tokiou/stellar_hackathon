@@ -13,14 +13,29 @@ export interface PrivyCreatedWallet {
 	public_key?: string; // raw ed25519 hex (fallback to derive the address)
 }
 
+export type PrivyAuthorizationContext = {
+	authorization_private_keys: string[];
+};
+
+export interface PrivyRawSignInput {
+	params: { hash: string };
+	authorization_context?: PrivyAuthorizationContext;
+}
+
+export interface PrivyCreateInput {
+	chain_type: string;
+	user_id?: string;
+	owner?: { public_key: string };
+}
+
 export interface PrivyWalletClient {
 	/** Returns a 64-byte Ed25519 signature for a 0x-hex hash. */
 	rawSign(
 		walletId: string,
-		input: { params: { hash: string } },
+		input: PrivyRawSignInput,
 	): Promise<{ signature: string } | string>;
 	/** Provisions a new server wallet (onboarding). Optional on the interface. */
-	create?(input: { chain_type: string; user_id?: string }): Promise<PrivyCreatedWallet>;
+	create?(input: PrivyCreateInput): Promise<PrivyCreatedWallet>;
 }
 
 export type PrivyStellarConfig = {
@@ -28,6 +43,8 @@ export type PrivyStellarConfig = {
 	appSecret: string; // secret — never logged or returned
 	walletId: string;
 	walletPublicKey: string; // Stellar G… address (public)
+	/** base64 PKCS8 P-256 authorization private key (required to authorize rawSign). */
+	authorizationPrivateKey?: string;
 };
 
 /**
@@ -62,7 +79,7 @@ export function createRealPrivyWalletClient(
 		},
 		async create(input) {
 			const wallets = (await getWallets()) as unknown as {
-				create: (i: { chain_type: string; user_id?: string }) => Promise<PrivyCreatedWallet>;
+				create: (i: PrivyCreateInput) => Promise<PrivyCreatedWallet>;
 			};
 			return wallets.create(input);
 		},
@@ -77,10 +94,11 @@ export function resolvePrivyStellarConfig(
 	const appSecret = env.PRIVY_APP_SECRET?.trim();
 	const walletId = env.COMPASS_STELLAR_PRIVY_WALLET_ID?.trim();
 	const walletPublicKey = env.COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY?.trim();
+	const authorizationPrivateKey = env.PRIVY_AUTHORIZATION_KEY?.trim();
 	if (!appId || !appSecret || !walletId || !walletPublicKey) {
 		return null;
 	}
-	return { appId, appSecret, walletId, walletPublicKey };
+	return { appId, appSecret, walletId, walletPublicKey, authorizationPrivateKey };
 }
 
 /** Normalizes a Privy raw-sign response to a base64 signature for the Stellar SDK. */

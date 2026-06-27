@@ -36,6 +36,7 @@ type ResolvedPrivy =
 			client: PrivyWalletClient;
 			walletId: string;
 			walletPublicKey: string;
+			authorizationPrivateKey?: string;
 			passphrase: string;
 	  }
 	| { ok: false; reason: CosignRefusalReason };
@@ -71,6 +72,7 @@ function resolve(
 		client,
 		walletId: config.walletId,
 		walletPublicKey: config.walletPublicKey,
+		authorizationPrivateKey: config.authorizationPrivateKey,
 		passphrase,
 	};
 }
@@ -118,6 +120,15 @@ export function createPrivyStellarCosigner(
 				const hashHex = `0x${tx.hash().toString("hex")}`;
 				const response = await resolved.client.rawSign(resolved.walletId, {
 					params: { hash: hashHex },
+					...(resolved.authorizationPrivateKey
+						? {
+								authorization_context: {
+									authorization_private_keys: [
+										resolved.authorizationPrivateKey,
+									],
+								},
+							}
+						: {}),
 				});
 				const signatureB64 = normalizeRawSignature(response);
 				// SDK validates the signature against tx.hash() + the public key.
