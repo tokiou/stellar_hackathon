@@ -77,3 +77,44 @@ tool names). The proxy gates by **tool name**, before the call reaches the downs
   (`runStellarGuard`), so per-amount / per-recipient decisions (ALLOW/DENY/ESCALATE) are not applied
   at the proxy — only name-based gating is. Wiring `runStellarGuard` into the dispatcher is the
   follow-up that makes proxy decisions as precise as the demo.
+
+## VERIFIED: launched end-to-end (2026-06-27)
+
+The Compass proxy was actually run wrapping `stellar-mcp` over real stdio MCP. Result:
+- `tools/list` through the proxy returned all 12 stellar-mcp tools.
+- `tools/call stellar_balance` → **forwarded** to the real downstream (read-only → allow).
+- `tools/call stellar_payment` → **blocked by Compass** (`decision: deny`, fail-closed).
+
+Note: `stellar-mcp` (npm) ships `src/` but not `dist/`, so the downstream is run via `tsx`.
+
+### Working Claude config (run from this repo)
+
+For **Claude Code** (`claude mcp add-json`) or `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "compass-stellar": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "/home/tokiou/fran-proyects/stellar_hackathon/back/services/mcp/server/mcpServer.ts",
+        "--downstream-name", "stellar-tools",
+        "--downstream-command", "npx",
+        "--downstream-args-json", "[\"tsx\",\"/home/tokiou/fran-proyects/stellar_hackathon/node_modules/stellar-mcp/src/index.ts\"]",
+        "--downstream-env-keys", "STELLAR_SERVER_URL"
+      ],
+      "env": {
+        "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org",
+        "COMPASS_HYBRID_GUARD_ENABLED": "false"
+      }
+    }
+  }
+}
+```
+
+- With `COMPASS_HYBRID_GUARD_ENABLED=false`: prefilter only — read-only tools forward, mutating
+  tools (payment, change_trust, …) are **denied fail-closed**. Enough to demo blocking.
+- For full ALLOW/ESCALATE decisions (not just deny), also run the hosted backend
+  (`npm run hosted:dev`) and set `COMPASS_HYBRID_GUARD_ENABLED=true`,
+  `COMPASS_HOSTED_API_URL`, `COMPASS_HOSTED_API_KEY`.

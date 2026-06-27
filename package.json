@@ -61,7 +61,8 @@
     "next": "^15.5.16",
     "posthog-node": "^5.38.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "stellar-mcp": "^0.0.11"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
