@@ -30,7 +30,7 @@ import {
 import { fundTestnetAccount } from "../back/services/stellar/providers/friendbot";
 import { getHorizonServer } from "../back/services/stellar/providers/stellarConnection";
 import { getStellarNetworkConfig } from "../back/services/stellar/providers/stellarNetworkConfig";
-import { createPrivyStellarCosigner } from "../back/services/stellar/signer/privyStellarCosigner";
+import { resolveStellarCosigner } from "../back/services/stellar/signer/stellarCosignerFactory";
 import {
 	assertCompassRequired,
 	buildMultisigSetupEnvelope,
@@ -42,46 +42,33 @@ const PASS = "\x1b[32m✓\x1b[0m";
 const FAIL = "\x1b[31m✗\x1b[0m";
 const INFO = "\x1b[36m→\x1b[0m";
 
-function buildPrivyContext(env) {
-	const realConfigured =
-		env.PRIVY_APP_ID &&
-		env.PRIVY_APP_SECRET &&
-		env.COMPASS_STELLAR_PRIVY_WALLET_ID &&
-		env.COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY;
-
-	if (realConfigured) {
-		// Real Privy: adapter builds the real client from env; no injected client.
-		return { mode: "real", env, client: undefined };
-	}
-
-	// Simulated Privy: a local keypair plays the role of the Privy server wallet.
-	const privyWallet = Keypair.random();
-	const simEnv = {
-		...env,
-		PRIVY_APP_ID: "sim-app",
-		PRIVY_APP_SECRET: "sim-secret",
-		COMPASS_STELLAR_PRIVY_WALLET_ID: "sim-wallet",
-		COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY: privyWallet.publicKey(),
-	};
-	const client = {
-		async rawSign(_walletId, input) {
-			const hex = input.params.hash.replace(/^0x/, "");
-			const sig = privyWallet.sign(Buffer.from(hex, "hex"));
-			return { signature: `0x${sig.toString("hex")}` };
-		},
-	};
-	return { mode: "simulated", env: simEnv, client };
-}
+const REQUIRED_PRIVY_VARS = [
+	"PRIVY_APP_ID",
+	"PRIVY_APP_SECRET",
+	"COMPASS_STELLAR_PRIVY_WALLET_ID",
+	"COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY",
+	"PRIVY_AUTHORIZATION_KEY",
+];
 
 async function main() {
 	const config = getStellarNetworkConfig();
-	const { mode, env, client } = buildPrivyContext(process.env);
-	const cosigner = createPrivyStellarCosigner({ env, client });
+
+	// Privy is MANDATORY here — no simulation. Require real credentials.
+	const missing = REQUIRED_PRIVY_VARS.filter((k) => !process.env[k]);
+	if (missing.length > 0) {
+		throw new Error(
+			`Privy is required (no simulation). Missing: ${missing.join(", ")}. Run scripts/privy-setup.mjs first.`,
+		);
+	}
+
+	// Goes through the MANDATORY factory (defaults to + requires privy).
+	// No injected client -> the adapter builds the REAL @privy-io/node client.
+	const cosigner = resolveStellarCosigner(process.env);
 	const compassPublicKey = cosigner.getPublicKey();
 	if (!compassPublicKey) {
-		throw new Error("Privy cosigner not configured.");
+		throw new Error("Privy cosigner not configured (real credentials required).");
 	}
-	console.log(`${INFO} Privy mode: ${mode}. Compass (Privy) signer: ${compassPublicKey}`);
+	console.log(`${INFO} Privy mode: REAL (mandatory). Compass (Privy) signer: ${compassPublicKey}`);
 
 	const server = getHorizonServer();
 	const user = Keypair.random();
