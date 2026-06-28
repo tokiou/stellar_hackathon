@@ -150,18 +150,48 @@ describe("createPrivyStellarCosigner", () => {
 	});
 });
 
-describe("resolveStellarCosigner", () => {
-	it("returns the local signer by default", () => {
+describe("resolveStellarCosigner — Privy mandatory", () => {
+	it("defaults to the Privy signer (no provider set)", () => {
+		const cosigner = resolveStellarCosigner(privyEnv(), {
+			client: makePrivyClient(),
+		});
+		expect(cosigner.getPublicKey()).toBe(PRIVY_WALLET.publicKey());
+	});
+
+	it("uses Privy when explicitly selected", () => {
+		const cosigner = resolveStellarCosigner(
+			privyEnv({ COMPASS_STELLAR_SIGNER_PROVIDER: "privy" }),
+			{ client: makePrivyClient() },
+		);
+		expect(cosigner.getPublicKey()).toBe(PRIVY_WALLET.publicKey());
+	});
+
+	it("throws PRIVY_REQUIRED when the local signer is selected without the dev override", () => {
+		expect(() =>
+			resolveStellarCosigner({
+				STELLAR_NETWORK_PASSPHRASE: Networks.TESTNET,
+				COMPASS_STELLAR_SIGNER_PROVIDER: "local",
+			}),
+		).toThrow(/PRIVY_REQUIRED/);
+	});
+
+	it("allows the local signer only behind COMPASS_ALLOW_LOCAL_SIGNER=true (dev)", () => {
 		const cosigner = resolveStellarCosigner({
 			STELLAR_NETWORK_PASSPHRASE: Networks.TESTNET,
+			COMPASS_STELLAR_SIGNER_PROVIDER: "local",
+			COMPASS_ALLOW_LOCAL_SIGNER: "true",
 		});
-		// local signer with no secret configured -> getPublicKey null
+		// local signer with no secret configured -> getPublicKey null, but it resolved.
 		expect(cosigner.getPublicKey()).toBeNull();
 	});
 
-	it("returns the Privy signer when selected", () => {
-		const cosigner = resolveStellarCosigner(privyEnv(), { client: makePrivyClient() });
-		expect(cosigner.getPublicKey()).toBe(PRIVY_WALLET.publicKey());
+	it("throws PRIVY_REQUIRED for an unsupported provider", () => {
+		expect(() =>
+			resolveStellarCosigner({
+				STELLAR_NETWORK_PASSPHRASE: Networks.TESTNET,
+				COMPASS_STELLAR_SIGNER_PROVIDER: "dfns",
+			}),
+		).toThrow(/PRIVY_REQUIRED/);
 	});
 });
 
