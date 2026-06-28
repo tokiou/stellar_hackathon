@@ -13,6 +13,27 @@ import {
 } from "@shared/llmDecisionContracts";
 import type { CompassDecision } from "@shared/executionGatewayContracts";
 
+// ── Debug logger (shared file) ──
+import { appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+function getLogFile(): string {
+	return join(process.cwd(), "logs", "compass-debug.log");
+}
+
+function llmDebug(fn: string, message: string, data?: Record<string, unknown>) {
+	const raw = process.env["COMPASS_DEBUG"];
+	if (!raw || raw.trim() === "" || raw.trim() === "0") return;
+	const tokens = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+	if (!tokens.some((t) => t === "true" || t === "1" || t === "*") && !tokens.includes("llm")) return;
+
+	const dir = join(process.cwd(), "logs");
+	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+	const timestamp = new Date().toISOString();
+	const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+	appendFileSync(getLogFile(), `[${timestamp}] [llm:${fn}] ${message}${dataStr}\n`, "utf-8");
+}
+
 export function resolveLlmConfig(
 	env: Record<string, string | undefined> = process.env,
 ): LlmJudgeConfig {
@@ -126,10 +147,12 @@ export type LlmProviderFn = (input: {
 }) => Promise<unknown>;
 
 const LLM_SYSTEM_PROMPT = [
-	"You are Compass MCP Guard's advisory risk judge.",
-	"Return only JSON with decision, confidence, reasonCodes, and rationale.",
-	"You may keep or tighten the deterministic decision, never loosen it.",
-	"Never request transaction execution or signing.",
+	"You are Compass MCP Guard's advisory risk judge for an execution firewall.",
+	"A tool call has been intercepted before execution. Your job is to evaluate whether it is safe to allow.",
+	"Return only JSON with: decision (ALLOW | DENY | REQUIRE_HUMAN_APPROVAL | REQUIRE_ADDITIONAL_CONTEXT), confidence (0-1), reasonCodes (array of short codes), and rationale (1-2 sentences explaining your reasoning).",
+	"Consider: Is the action a read-only query or a state-changing operation? Is the destination/recipient suspicious? Is the amount unusually large? Does the user's intent match the action?",
+	"Be decisive when context is clear. Only REQUIRE_ADDITIONAL_CONTEXT if critical information is genuinely missing.",
+	"Never request transaction signing or key exposure.",
 ].join(" ");
 
 export async function callLlmJudge(
@@ -137,12 +160,23 @@ export async function callLlmJudge(
 	config: LlmJudgeConfig,
 	providerFn?: LlmProviderFn,
 ): Promise<LlmGuardOutput | undefined> {
+	llmDebug("callLlmJudge", "Start", {
+		toolName: input.toolName,
+		actionKind: input.actionKind,
+		deterministicDecision: input.deterministicDecision,
+		enabled: config.enabled,
+		provider: config.provider,
+		model: config.model,
+	});
+
 	if (!isLlmConfigured(config)) {
+		llmDebug("callLlmJudge", "Not configured, skipping", { config });
 		return undefined;
 	}
 
 	const provider = providerFn ?? defaultProviderFor(config.provider);
 	if (!provider) {
+		llmDebug("callLlmJudge", "No provider for: " + String(config.provider));
 		return undefined;
 	}
 
@@ -151,15 +185,40 @@ export async function callLlmJudge(
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
+		const prompt = JSON.stringify(input);
+		const t0 = Date.now();
+		llmDebug("callLlmJudge", "Calling provider", {
+			provider: config.provider,
+			model: config.model,
+			timeoutMs,
+			promptPreview: prompt.slice(0, 500),
+		});
+
 		const raw = await provider({
-			prompt: JSON.stringify(input),
+			prompt,
 			config,
 			signal: controller.signal,
 		});
 		clearTimeout(timeoutId);
-		return validateLlmGuardOutput(raw);
-	} catch {
+		const elapsedMs = Date.now() - t0;
+
+		const validated = validateLlmGuardOutput(raw);
+		llmDebug("callLlmJudge", "Raw response", {
+			toolName: input.toolName,
+			elapsedMs,
+			raw,
+			validated,
+		});
+
+		return validated;
+	} catch (error) {
 		clearTimeout(timeoutId);
+		const elapsedMs = Date.now() - (Date.now() - 1);
+		const msg = error instanceof Error ? error.message : String(error);
+		llmDebug("callLlmJudge", "Error", {
+			toolName: input.toolName,
+			error: msg,
+		});
 		return undefined;
 	}
 }
@@ -171,7 +230,8 @@ function defaultProviderFor(provider: string | undefined): LlmProviderFn | undef
 	if (provider === "openai") {
 		return callOpenAiResponses;
 	}
-	return undefined;
+	// Any provider with a baseUrl uses OpenAI-compatible chat completions
+	return callOpenCodeGoChatCompletions;
 }
 
 async function callOpenCodeGoChatCompletions(input: {
@@ -183,8 +243,14 @@ async function callOpenCodeGoChatCompletions(input: {
 		return undefined;
 	}
 
+	// Ensure URL ends with /chat/completions
+	let url = input.config.baseUrl.replace(/\/+$/, "");
+	if (!url.endsWith("/chat/completions")) {
+		url += "/chat/completions";
+	}
+
 	return callChatCompletionsEndpoint({
-		url: input.config.baseUrl,
+		url,
 		prompt: input.prompt,
 		config: input.config,
 		signal: input.signal,
@@ -205,27 +271,51 @@ async function callChatCompletionsEndpoint(input: {
 		headers.Authorization = `Bearer ${input.config.apiKey}`;
 	}
 
+	const body = JSON.stringify({
+		model: input.config.model,
+		messages: [
+			{ role: "system", content: LLM_SYSTEM_PROMPT },
+			{ role: "user", content: input.prompt },
+		],
+		response_format: { type: "json_object" },
+	});
+
+	llmDebug("chatCompletions", "Request", {
+		url: input.url,
+		model: input.config.model,
+		bodyPreview: body.slice(0, 300),
+	});
+
+	const t0 = Date.now();
 	const response = await fetch(input.url, {
 		method: "POST",
 		signal: input.signal,
 		headers,
-		body: JSON.stringify({
-			model: input.config.model,
-			messages: [
-				{ role: "system", content: LLM_SYSTEM_PROMPT },
-				{ role: "user", content: input.prompt },
-			],
-			response_format: { type: "json_object" },
-		}),
+		body,
+	});
+
+	llmDebug("chatCompletions", "Response status", {
+		status: response.status,
+		statusText: response.statusText,
+		elapsedMs: Date.now() - t0,
 	});
 
 	if (!response.ok) {
+		const errText = await response.text().catch(() => "unable to read");
+		llmDebug("chatCompletions", "Error body", { body: errText.slice(0, 500) });
 		return undefined;
 	}
 
 	const data = (await response.json()) as {
 		choices?: Array<{ message?: { content?: unknown } }>;
 	};
+	llmDebug("chatCompletions", "Parsed data", {
+		choicesCount: data.choices?.length,
+		content: typeof data.choices?.[0]?.message?.content === "string"
+			? (data.choices[0].message.content as string).slice(0, 500)
+			: undefined,
+	});
+
 	const content = data.choices?.[0]?.message?.content;
 	if (typeof content !== "string") {
 		return undefined;

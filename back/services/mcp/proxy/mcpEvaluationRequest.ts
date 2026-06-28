@@ -10,6 +10,11 @@ import type { HostedEvaluationRequestInput } from "./mcpProxyContracts";
 export type EvaluationRequestInput = HostedEvaluationRequestInput & {
 	userId?: string;
 	sessionId?: string;
+	agentContext?: {
+		clientName?: string;
+		userIntent?: string;
+		sessionId?: string;
+	};
 };
 
 export function buildEvaluateActionRequest(

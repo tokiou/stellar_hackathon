@@ -143,21 +143,94 @@ function isNotificationMethod(method: string): boolean {
 	return method.startsWith("notifications/");
 }
 
+/**
+ * Flatten a JSON Schema by resolving all $ref pointers inline.
+ * OpenAI and other LLM providers do not support $ref in function schemas.
+ * Handles refs like "#/definitions/foo", "#/$defs/foo", and "#/properties/x/y/z".
+ */
+function flattenSchema(schema: Record<string, unknown>): Record<string, unknown> {
+	const definitions = (schema.definitions ?? schema.$defs ?? {}) as Record<string, Record<string, unknown>>;
+	const seen = new Set<string>();
+
+	function resolveRef(refPath: string): Record<string, unknown> | undefined {
+		// Try definitions/$defs first
+		const defName = refPath.replace(/^#\/(definitions|defs)\//, "");
+		if (definitions[defName]) return definitions[defName];
+
+		// Navigate into the schema itself for paths like "#/properties/claimants/items/..."
+		if (refPath.startsWith("#/")) {
+			const parts = refPath.slice(2).split("/");
+			let current: any = schema;
+			for (const part of parts) {
+				if (current && typeof current === "object" && part in current) {
+					current = current[part];
+				} else {
+					return undefined;
+				}
+			}
+			if (typeof current === "object" && current !== null) return current;
+		}
+		return undefined;
+	}
+
+	function resolve(obj: unknown): unknown {
+		if (!obj || typeof obj !== "object") return obj;
+
+		if ("$ref" in (obj as Record<string, unknown>)) {
+			const ref = (obj as Record<string, string>).$ref;
+			if (seen.has(ref)) {
+				return { type: "string", description: "(complex nested structure)" };
+			}
+			seen.add(ref);
+			const resolved = resolveRef(ref);
+			if (!resolved) return obj;
+			const result = resolve(resolved);
+			seen.delete(ref);
+			return result;
+		}
+
+		if (Array.isArray(obj)) return obj.map(resolve);
+
+		const out: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(obj)) {
+			if (key === "definitions" || key === "$defs") continue;
+			out[key] = resolve(value);
+		}
+		return out;
+	}
+
+	return resolve(schema) as Record<string, unknown>;
+}
+
 function mapProxyListToolsResult(result: ProxyListToolsResult): ListToolsResult {
 	return {
-		tools: result.tools.map((tool) => {
-			const descriptor = isResultObject(tool.descriptor) ? tool.descriptor : {};
-			return {
-				...descriptor,
-				name: tool.name,
-				description: tool.description ?? "",
-				inputSchema: (tool.inputSchema ?? {
+		tools: result.tools
+			.map((tool) => {
+				const descriptor = isResultObject(tool.descriptor) ? tool.descriptor : {};
+				const rawSchema = (tool.inputSchema ?? {
 					type: "object",
 					properties: {},
-				}) as ListToolsResult["tools"][number]["inputSchema"],
-			};
-		}),
+				}) as Record<string, unknown>;
+				return {
+					...descriptor,
+					name: tool.name,
+					description: tool.description ?? "",
+					inputSchema: flattenSchema(rawSchema) as ListToolsResult["tools"][number]["inputSchema"],
+				};
+			})
+			.filter((tool) => isSchemaCompatible(tool.inputSchema as Record<string, unknown>)),
 	};
+}
+
+/**
+ * Check if a schema is compatible with OpenAI function calling.
+ * Rejects schemas with nested anyOf inside array items (not supported).
+ */
+function isSchemaCompatible(schema: Record<string, unknown>): boolean {
+	const str = JSON.stringify(schema);
+	// OpenAI rejects items as array: "items": [{...}] — must be "items": {...}
+	if (/"items"\s*:\s*\[/.test(str)) return false;
+	return true;
 }
 
 function mapProxyCallToolResult(

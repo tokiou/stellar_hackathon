@@ -17,6 +17,7 @@ export type SanitizeLlmInputParams = {
 	policyId?: string;
 	evaluatedRules?: string[];
 	rawContext?: Record<string, unknown>;
+	userIntent?: string;
 };
 
 export function sanitizeLlmJudgeInput(
@@ -36,6 +37,7 @@ export function sanitizeLlmJudgeInput(
 		policyId: params.policyId,
 		evaluatedRules: params.evaluatedRules,
 		...(sanitizedContext ? { sanitizedContext } : {}),
+		...(params.userIntent ? { userIntent: params.userIntent } : {}),
 		sanitized: true,
 	};
 }
