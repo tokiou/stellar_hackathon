@@ -35,7 +35,7 @@ import {
 	assertCompassRequired,
 	buildMultisigSetupEnvelope,
 } from "../back/services/stellar/demo/stellarMultisigSetup";
-import { runStellarGuard } from "../back/services/stellar/demo/stellarGuardPipeline";
+import { runStellarGuard } from "../back/services/stellar/guard/stellarGuardPipeline";
 import { DEFAULT_POLICY } from "../hosted/policy/defaultPolicy";
 
 const PASS = "\x1b[32m✓\x1b[0m";

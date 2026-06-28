@@ -38,7 +38,7 @@ import {
 	assertCompassRequired,
 	buildMultisigSetupEnvelope,
 } from "../back/services/stellar/demo/stellarMultisigSetup";
-import { runStellarGuard } from "../back/services/stellar/demo/stellarGuardPipeline";
+import { runStellarGuard } from "../back/services/stellar/guard/stellarGuardPipeline";
 import { DEFAULT_POLICY } from "../hosted/policy/defaultPolicy";
 import { DEMO_CASES } from "./stellar-demo-cases.mjs";
 

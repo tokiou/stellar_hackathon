@@ -1,144 +1,195 @@
-import { Keypair, Networks } from "@stellar/stellar-sdk";
-import { describe, expect, it, vi } from "vitest";
-
+import {
+	Account,
+	Asset,
+	Keypair,
+	Networks,
+	Operation,
+	TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import { DEFAULT_POLICY } from "@hosted/policy/defaultPolicy";
+import { describe, expect, it, vi } from "vitest";
 
 import { createPrivyStellarCosigner } from "../../signer/privyStellarCosigner";
 import type { PrivyWalletClient } from "../../signer/privyClient";
-import {
-	createStellarProxyExecuteOverride,
-	isCompassExecutedStellarTool,
-} from "../stellarProxyExecutor";
+import { createStellarProxyExecuteOverride } from "../stellarProxyExecutor";
 
-const PRIVY_WALLET = Keypair.random();
+// The agent's wallet (Compass NEVER sees this key — it only co-signs).
+const AGENT = Keypair.random();
+// Compass's co-signer key (in tests a local keypair stands in for the Privy TEE).
+const COMPASS = Keypair.random();
 const DEST = Keypair.random().publicKey();
 
+const PASSPHRASE = Networks.TESTNET;
+
+/** Mock Privy client backed by a real Ed25519 keypair (Compass's co-signer). */
 function makePrivyClient(): PrivyWalletClient {
 	return {
 		rawSign: vi.fn(async (_walletId: string, input: { params: { hash: string } }) => {
-			const sig = PRIVY_WALLET.sign(Buffer.from(input.params.hash.replace(/^0x/, ""), "hex"));
+			const sig = COMPASS.sign(Buffer.from(input.params.hash.replace(/^0x/, ""), "hex"));
 			return { signature: `0x${sig.toString("hex")}` };
 		}),
 	};
 }
 
-function env(overrides: Record<string, string | undefined> = {}) {
+function privyEnv(overrides: Record<string, string | undefined> = {}) {
 	return {
 		STELLAR_NETWORK: "testnet",
-		STELLAR_NETWORK_PASSPHRASE: Networks.TESTNET,
+		STELLAR_NETWORK_PASSPHRASE: PASSPHRASE,
 		COMPASS_STELLAR_SIGNER_PROVIDER: "privy",
 		PRIVY_APP_ID: "app",
 		PRIVY_APP_SECRET: "secret",
 		COMPASS_STELLAR_PRIVY_WALLET_ID: "wallet",
-		COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY: PRIVY_WALLET.publicKey(),
+		COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY: COMPASS.publicKey(),
 		FALLBACK_XLM_USD_PRICE: "0.1",
 		...overrides,
 	};
 }
 
-function deps(overrides = {}) {
+/** A 2-of-2 multisig account: agent (master) + Compass, threshold 2. */
+function multisigAccount() {
 	return {
-		env: env(),
-		cosigner: createPrivyStellarCosigner({ env: env(), client: makePrivyClient() }),
-		loadAccount: async () => ({ sequence: "100", medThreshold: 0 }),
-		submit: vi.fn(async () => ({ hash: "txhash123" })),
-		knownRecipients: [DEST],
-		...overrides,
+		signers: [
+			{ key: AGENT.publicKey(), weight: 1 },
+			{ key: COMPASS.publicKey(), weight: 1 },
+		],
+		thresholds: { low_threshold: 0, med_threshold: 2, high_threshold: 2 },
 	};
 }
 
-describe("isCompassExecutedStellarTool", () => {
-	it("recognizes stellar_payment, not reads", () => {
-		expect(isCompassExecutedStellarTool("stellar_payment")).toBe(true);
-		expect(isCompassExecutedStellarTool("stellar_balance")).toBe(false);
+function cosigner() {
+	return createPrivyStellarCosigner({
+		env: privyEnv(),
+		client: makePrivyClient(),
+		loadAccount: async () => multisigAccount(),
 	});
-});
+}
 
-describe("createStellarProxyExecuteOverride", () => {
-	it("forwards read-only tools (override returns null)", async () => {
-		const override = createStellarProxyExecuteOverride(deps());
-		const result = await override({ toolName: "stellar_balance", arguments: { account: "G..." } });
-		expect(result).toBeNull();
+/** Build a payment from the agent account and sign it with the AGENT key only. */
+function agentSignedPayment(amount: string, destination = DEST): string {
+	const tx = new TransactionBuilder(new Account(AGENT.publicKey(), "100"), {
+		fee: "100",
+		networkPassphrase: PASSPHRASE,
+	})
+		.addOperation(Operation.payment({ destination, asset: Asset.native(), amount }))
+		.setTimeout(120)
+		.build();
+	tx.sign(AGENT); // ONLY the agent signs — 1 signature
+	return tx.toXDR();
+}
+
+function makeOverride(extra: Record<string, unknown> = {}) {
+	const submit = vi.fn<[string], Promise<{ hash: string }>>(async () => ({
+		hash: "txhash_abc",
+	}));
+	const override = createStellarProxyExecuteOverride({
+		env: privyEnv(),
+		cosigner: cosigner(),
+		submit,
+		knownRecipients: [DEST],
+		...extra,
 	});
+	return { override, submit };
+}
 
-	it("BLOCKS fund-moving tools it cannot co-sign via Privy (no self-signing)", async () => {
-		const override = createStellarProxyExecuteOverride(deps());
-		for (const tool of ["stellar_change_trust", "stellar_claim_claimable_balance", "soroban_deploy"]) {
-			const result = await override({ toolName: tool, arguments: {} });
-			expect(result?.outcome).toBe("deny");
-		}
-	});
-
-	it("BLOCKS any call carrying a raw secret key (anti self-sign)", async () => {
-		const override = createStellarProxyExecuteOverride(deps());
-		const result = await override({
-			toolName: "stellar_create_asset",
-			arguments: { issuerSecretKey: "SABC...", code: "USDC" },
-		});
-		expect(result?.outcome).toBe("deny");
-	});
-
-	it("ALLOW: co-signs via Privy and submits, marking the signer", async () => {
-		const d = deps();
-		const override = createStellarProxyExecuteOverride(d);
+describe("createStellarProxyExecuteOverride — real co-signing", () => {
+	it("ALLOW: co-signs an agent-signed tx (2 sigs) and submits", async () => {
+		const { override, submit } = makeOverride();
 		const result = await override({
 			toolName: "stellar_payment",
-			arguments: { destination: DEST, amount: "5" }, // ~$0.5 within policy, known recipient
+			arguments: { envelopeXdr: agentSignedPayment("50") }, // ~$5 within policy, known recipient
 		});
+
 		expect(result?.outcome).toBe("allow");
 		expect(result?.data?.structuredContent).toMatchObject({
 			compassSigner: "privy",
-			txHash: "txhash123",
+			txHash: "txhash_abc",
+			collectedSigners: 2,
 		});
-		expect(d.submit).toHaveBeenCalledTimes(1);
+		expect(submit).toHaveBeenCalledTimes(1);
+
+		// The submitted XDR carries BOTH the agent's and Compass's signatures.
+		const submitted = submit.mock.calls[0][0] as string;
+		const tx = TransactionBuilder.fromXDR(submitted, PASSPHRASE);
+		expect(tx.signatures).toHaveLength(2);
+		const hints = tx.signatures.map((s) => s.hint().toString("hex"));
+		expect(hints).toContain(AGENT.signatureHint().toString("hex"));
+		expect(hints).toContain(COMPASS.signatureHint().toString("hex"));
 	});
 
-	it("ESCALATE: amount out of range -> not signed, not submitted", async () => {
-		const d = deps();
-		const override = createStellarProxyExecuteOverride(d);
+	it("rejects a transaction the agent did NOT sign (Compass only co-signs)", async () => {
+		const { override, submit } = makeOverride();
+		// Build the same payment but DO NOT sign it.
+		const unsigned = new TransactionBuilder(new Account(AGENT.publicKey(), "100"), {
+			fee: "100",
+			networkPassphrase: PASSPHRASE,
+		})
+			.addOperation(Operation.payment({ destination: DEST, asset: Asset.native(), amount: "5" }))
+			.setTimeout(120)
+			.build()
+			.toXDR();
+
 		const result = await override({
 			toolName: "stellar_payment",
-			arguments: { destination: DEST, amount: "2000" }, // ~$200 > $10
+			arguments: { envelopeXdr: unsigned },
 		});
-		expect(result?.outcome).toBe("require_approval");
-		expect(d.submit).not.toHaveBeenCalled();
+		expect(result?.outcome).toBe("deny");
+		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("DENY: blocked recipient -> not signed", async () => {
+	it("ESCALATE: amount out of range -> no co-sign, no submit", async () => {
+		const { override, submit } = makeOverride();
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { envelopeXdr: agentSignedPayment("2000") }, // ~$200 > $10
+		});
+		expect(result?.outcome).toBe("require_approval");
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("DENY: blocked recipient -> no co-sign", async () => {
 		const blockedPolicy = {
 			...DEFAULT_POLICY,
 			transfers: { ...DEFAULT_POLICY.transfers, blocked_recipients: [DEST] },
 		};
-		const d = deps({ policy: blockedPolicy });
-		const override = createStellarProxyExecuteOverride(d);
+		const { override, submit } = makeOverride({ policy: blockedPolicy });
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { envelopeXdr: agentSignedPayment("5") },
+		});
+		expect(result?.outcome).toBe("deny");
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("BLOCKS a self-signing call (raw secret key in args)", async () => {
+		const { override, submit } = makeOverride();
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { destination: DEST, amount: "5", secretKey: AGENT.secret() },
+		});
+		expect(result?.outcome).toBe("deny");
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("BLOCKS an unsigned fund-moving intent (no envelopeXdr)", async () => {
+		const { override } = makeOverride();
 		const result = await override({
 			toolName: "stellar_payment",
 			arguments: { destination: DEST, amount: "5" },
 		});
 		expect(result?.outcome).toBe("deny");
-		expect(d.submit).not.toHaveBeenCalled();
 	});
 
-	it("invalid destination -> deny (build fails safely)", async () => {
-		const d = deps();
-		const override = createStellarProxyExecuteOverride(d);
-		const result = await override({
-			toolName: "stellar_payment",
-			arguments: { destination: "not-a-stellar-key", amount: "5" },
-		});
-		expect(result?.outcome).toBe("deny");
-		expect(d.submit).not.toHaveBeenCalled();
+	it("forwards read-only Stellar tools (returns null)", async () => {
+		const { override } = makeOverride();
+		const result = await override({ toolName: "stellar_balance", arguments: { account: DEST } });
+		expect(result).toBeNull();
 	});
 
-	it("denies when no Privy source wallet is configured", async () => {
-		const override = createStellarProxyExecuteOverride({
-			...deps(),
-			env: env({ COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY: undefined }),
-		});
-		const result = await override({
-			toolName: "stellar_payment",
-			arguments: { destination: DEST, amount: "5" },
-		});
-		expect(result?.outcome).toBe("deny");
+	it("ignores non-Stellar downstream tools (returns null -> normal proxy gate)", async () => {
+		const { override } = makeOverride();
+		for (const tool of ["sendToken", "swapToken", "createOrder", "transfer"]) {
+			const result = await override({ toolName: tool, arguments: { amount: "5" } });
+			expect(result).toBeNull();
+		}
 	});
 });
