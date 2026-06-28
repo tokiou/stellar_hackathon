@@ -163,15 +163,17 @@ function flattenSchema(schema: Record<string, unknown>): Record<string, unknown>
 		// Navigate into the schema itself for paths like "#/properties/claimants/items/..."
 		if (refPath.startsWith("#/")) {
 			const parts = refPath.slice(2).split("/");
-			let current: any = schema;
+			let current: unknown = schema;
 			for (const part of parts) {
-				if (current && typeof current === "object" && part in current) {
-					current = current[part];
+				if (current && typeof current === "object" && part in (current as object)) {
+					current = (current as Record<string, unknown>)[part];
 				} else {
 					return undefined;
 				}
 			}
-			if (typeof current === "object" && current !== null) return current;
+			if (typeof current === "object" && current !== null) {
+				return current as Record<string, unknown>;
+			}
 		}
 		return undefined;
 	}
