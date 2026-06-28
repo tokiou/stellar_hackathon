@@ -85,3 +85,4 @@ cdp_api_key.json
 /[ ]
 .stellar-demo-wallet.json
 .compass-events.jsonl
+.compass-privy.env
