@@ -64,6 +64,18 @@ function cosigner() {
 	});
 }
 
+/** The agent's signer — its Privy-provisioned wallet (a local keypair in tests). */
+function agentSigner() {
+	return {
+		getPublicKey: () => AGENT.publicKey(),
+		sign: async (envelopeXdr: string) => {
+			const tx = TransactionBuilder.fromXDR(envelopeXdr, PASSPHRASE);
+			tx.sign(AGENT);
+			return tx.toXDR();
+		},
+	};
+}
+
 /** Build a payment from the agent account and sign it with the AGENT key only. */
 function agentSignedPayment(amount: string, destination = DEST): string {
 	const tx = new TransactionBuilder(new Account(AGENT.publicKey(), "100"), {
@@ -114,6 +126,63 @@ describe("createStellarProxyExecuteOverride — real co-signing", () => {
 		const hints = tx.signatures.map((s) => s.hint().toString("hex"));
 		expect(hints).toContain(AGENT.signatureHint().toString("hex"));
 		expect(hints).toContain(COMPASS.signatureHint().toString("hex"));
+	});
+
+	it("INTENT: builds payment, agent signs (Privy), Compass co-signs, submits (2 sigs)", async () => {
+		const submit = vi.fn<[string], Promise<{ hash: string }>>(async () => ({
+			hash: "txhash_intent",
+		}));
+		const override = createStellarProxyExecuteOverride({
+			env: privyEnv(),
+			cosigner: cosigner(),
+			agentSigner: agentSigner(),
+			loadAccount: async () => ({ sequence: "100" }),
+			submit,
+			knownRecipients: [DEST],
+		});
+
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { destination: DEST, amount: "50" }, // ~$5, within policy
+		});
+
+		expect(result?.outcome).toBe("allow");
+		expect(result?.data?.structuredContent).toMatchObject({
+			compassSigner: "privy",
+			txHash: "txhash_intent",
+			collectedSigners: 2,
+		});
+
+		// Both the agent's and Compass's signatures are present.
+		const submitted = submit.mock.calls[0][0] as string;
+		const tx = TransactionBuilder.fromXDR(submitted, PASSPHRASE);
+		expect(tx.signatures).toHaveLength(2);
+		const hints = tx.signatures.map((s) => s.hint().toString("hex"));
+		expect(hints).toContain(AGENT.signatureHint().toString("hex"));
+		expect(hints).toContain(COMPASS.signatureHint().toString("hex"));
+	});
+
+	it("INTENT: DENY blocked recipient -> agent signs but Compass refuses to co-sign", async () => {
+		const blockedPolicy = {
+			...DEFAULT_POLICY,
+			transfers: { ...DEFAULT_POLICY.transfers, blocked_recipients: [DEST] },
+		};
+		const submit = vi.fn<[string], Promise<{ hash: string }>>(async () => ({ hash: "x" }));
+		const override = createStellarProxyExecuteOverride({
+			env: privyEnv(),
+			cosigner: cosigner(),
+			agentSigner: agentSigner(),
+			loadAccount: async () => ({ sequence: "100" }),
+			submit,
+			knownRecipients: [DEST],
+			policy: blockedPolicy,
+		});
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { destination: DEST, amount: "5" },
+		});
+		expect(result?.outcome).toBe("deny");
+		expect(submit).not.toHaveBeenCalled();
 	});
 
 	it("rejects a transaction the agent did NOT sign (Compass only co-signs)", async () => {
@@ -195,7 +264,8 @@ describe("createStellarProxyExecuteOverride — real co-signing", () => {
 		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("BLOCKS an unsigned fund-moving intent (no envelopeXdr)", async () => {
+	it("DENIES a payment intent when the agent wallet is NOT configured", async () => {
+		// No agentSigner and no COMPASS_STELLAR_AGENT_PRIVY_* in env -> cannot sign.
 		const { override } = makeOverride();
 		const result = await override({
 			toolName: "stellar_payment",
