@@ -1,0 +1,61 @@
+shared/types/llmDecisionContracts.ts
+  s_73034503f94fc0::t_ecf562d71950c4 22-23
+back/services/mcp/proxy/mcpEvaluationRequest.ts
+  s_73034503f94fc0::t_c0581dba6e9e2d 13-17
+back/services/mcp/proxy/mcpProxyDispatcher.ts
+  s_73034503f94fc0::t_5e44a2011097b8 179-182
+  s_73034503f94fc0::t_29fc58bc598267 327-329,331-335,338-347,349-356
+  s_73034503f94fc0::t_c811f1c1e0e7a5 330,336-337,348
+back/services/mcp/proxy/mcpProxyPolicyInterceptor.ts
+  s_c37f91b6b50c79::t_e4be96a507508d 34
+hosted/llm/llmDecisionSanitizer.ts
+  s_73034503f94fc0::t_18c7dab602ce6c 20,40
+back/services/mcp/server/mcpServer.ts
+  s_73034503f94fc0::t_950d5232583e51 146-148,150-154,176-180,182-183,186-187,189-204
+  s_73034503f94fc0::t_53a796a0a703aa 149,155-175,181,184-185,188
+  s_73034503f94fc0::t_dfab250dc7c1dd 207-210,213-221,225-233
+hosted/evaluate/evaluationService.ts
+  s_73034503f94fc0::t_a5e268582926d6 83-88,97-101
+  s_73034503f94fc0::t_941887a27061c4 191
+  s_73034503f94fc0::t_5acc9665c41f47 82
+  s_73034503f94fc0::t_c5912f98841e55 150-156
+  s_73034503f94fc0::t_b4f646d7e9ee7d 34-54
+  s_73034503f94fc0::t_1706cfb2566b4c 168
+  s_73034503f94fc0::t_d46a367921e171 183-190,192-204
+  s_73034503f94fc0::t_82e8f925b5cf93 269
+  s_73034503f94fc0::t_3e5a8a4f36a807 260-268
+hosted/llm/llmDecisionAdapter.ts
+  s_73034503f94fc0::t_38aab36877e83b 189,203,208,216
+  s_73034503f94fc0::t_f65cd5e6880033 16-27,29-36
+  s_73034503f94fc0::t_99fd52197f7dd2 274-288,294-299,304-305,312-318
+  s_73034503f94fc0::t_7a6b06dd044e61 28
+  s_73034503f94fc0::t_301bf2e4512f44 246-251,253
+  s_73034503f94fc0::t_c029b40348382f 150-155
+  s_73034503f94fc0::t_0a167eee964180 233-234
+  s_73034503f94fc0::t_0a321a33f8b908 289,300
+  s_73034503f94fc0::t_682f22de3996be 163-171,173,179,188,190-196,198,204-207,209-214,217-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d44151f23dbe66fe01ef9d7a16b294173e95ee1d",
+  "prompts": {},
+  "sessions": {
+    "s_73034503f94fc0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0f50e93daffenMHVKBXiJnADVQ",
+        "model": "mimo-v2.5"
+      },
+      "human_author": "ram4-dev <ramirocarnicersouble8@gmail.com>"
+    },
+    "s_c37f91b6b50c79": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0f4408412ffevLcJ0x4jSe0c1F",
+        "model": "mimo-v2.5"
+      },
+      "human_author": "ram4-dev <ramirocarnicersouble8@gmail.com>"
+    }
+  }
+}
