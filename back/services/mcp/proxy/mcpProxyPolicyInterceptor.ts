@@ -31,7 +31,7 @@ import type { ProxyDecision } from "./mcpProxyContracts";
 	| "signing"
 	| "unknown";
 
-const READ_ONLY_VERBS = new Set(["read", "list", "get", "query", "search", "balance", "balances", "prices", "status", "info", "account"]);
+const READ_ONLY_VERBS = new Set(["read", "list", "get", "query", "search", "balance", "balances", "prices", "status", "info", "account", "transactions"]);
 
 const PREPARATION_SIMULATION_VERBS = new Set([
 	"quote",

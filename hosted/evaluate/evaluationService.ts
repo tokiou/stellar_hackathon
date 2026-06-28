@@ -31,6 +31,27 @@ import {
 	type HostedRiskLevel,
 } from "./evaluationContracts";
 
+// ── Hosted debug logger (writes to shared compass-debug.log) ──
+import { appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+function getLogFile(): string {
+	return join(process.cwd(), "logs", "compass-debug.log");
+}
+
+function hostedDebug(module: string, fn: string, message: string, data?: Record<string, unknown>) {
+	const raw = process.env["COMPASS_DEBUG"];
+	if (!raw || raw.trim() === "" || raw.trim() === "0") return;
+	const tokens = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+	if (!tokens.some((t) => t === "true" || t === "1" || t === "*") && !tokens.includes(module.toLowerCase())) return;
+
+	const dir = join(process.cwd(), "logs");
+	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+	const timestamp = new Date().toISOString();
+	const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+	appendFileSync(getLogFile(), `[${timestamp}] [${module}:${fn}] ${message}${dataStr}\n`, "utf-8");
+}
+
 const AUDIT_DEGRADED_RESPONSE: EvaluateActionResponse = {
 	correlationId: "audit-unavailable",
 	decision: "deny",
@@ -58,6 +79,13 @@ export function createEvaluationService(
 
 	return {
 		async evaluateAction(request: EvaluateActionRequest): Promise<EvaluateActionResponse> {
+			const t0 = Date.now();
+			hostedDebug("hosted", "evaluateAction", "Incoming request", {
+				toolName: request.toolName,
+				correlationId: request.correlationId,
+				arguments: request.arguments,
+			});
+
 			const routerResult = await resolvedDeps.routeToolCall(
 				{
 					toolName: request.toolName,
@@ -65,6 +93,12 @@ export function createEvaluationService(
 				},
 				resolveRouterConfig(),
 			);
+
+			hostedDebug("hosted", "evaluateAction", "Router result", {
+				toolName: request.toolName,
+				classification: routerResult.classification,
+				reasoning: routerResult.reasoning,
+			});
 
 			const preliminaryResponse = await buildDecisionResponse({
 				request,
@@ -113,6 +147,13 @@ export function createEvaluationService(
 				// ponytail: telemetry failure must not block evaluation
 			}
 
+			hostedDebug("hosted", "evaluateAction", "Completed", {
+				toolName: request.toolName,
+				decision: finalResponse.decision,
+				riskLevel: finalResponse.riskLevel,
+				elapsedMs: Date.now() - t0,
+			});
+
 			return finalResponse;
 		},
 	};
@@ -124,6 +165,7 @@ async function buildDecisionResponse(input: {
 	deps: EvaluationServiceDependencies;
 }): Promise<EvaluateActionResponse> {
 	const { request, routerResult, deps } = input;
+	const t0 = Date.now();
 	const chainConfig = resolveChainConfig();
 
 	if (routerResult.classification === "skip") {
@@ -138,18 +180,28 @@ async function buildDecisionResponse(input: {
 
 	if (routerResult.classification === "unknown") {
 		// unknown → LLM judge decides (fail-closed only if LLM is unavailable)
-		const llmDecision = await deps.callLlmJudge(
-			sanitizeLlmJudgeInput({
-				toolName: request.toolName,
-				actionKind: "unknown",
-				network: chainConfig.network,
-				deterministicDecision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
-				riskClass: "unknown",
-				reasonCodes: ["ROUTER_UNKNOWN"],
-				rawContext: request.arguments,
-			}),
-			resolveLlmConfig(),
-		);
+		const llmInput = sanitizeLlmJudgeInput({
+			toolName: request.toolName,
+			actionKind: "unknown",
+			network: chainConfig.network,
+			deterministicDecision: COMPASS_DECISIONS.REQUIRE_ADDITIONAL_CONTEXT,
+			riskClass: "unknown",
+			reasonCodes: ["ROUTER_UNKNOWN"],
+			rawContext: request.arguments,
+			userIntent: request.agentContext?.userIntent,
+		});
+
+		hostedDebug("hosted", "llmJudge", "Sending to LLM judge (unknown tool)", {
+			toolName: request.toolName,
+			llmInput,
+		});
+
+		const llmDecision = await deps.callLlmJudge(llmInput, resolveLlmConfig());
+
+		hostedDebug("hosted", "llmJudge", "LLM judge response", {
+			toolName: request.toolName,
+			llmRaw: llmDecision,
+		});
 
 		const decision = llmDecision?.decision === "ALLOW"
 			? "allow"
@@ -196,20 +248,39 @@ async function buildDecisionResponse(input: {
 		context: derivePolicyContext(routerResult.classification, request.arguments),
 		policy,
 	});
-	const llmDecision = await deps.callLlmJudge(
-		sanitizeLlmJudgeInput({
-			toolName: request.toolName,
-			actionKind: routerResult.classification,
-			network: chainConfig.network,
-			deterministicDecision: policyEvaluation.decision,
-			riskClass: classification.riskClass,
-			reasonCodes: policyEvaluation.reasonCodes,
-			policyId: policyEvaluation.policyId,
-			evaluatedRules: policyEvaluation.evaluatedRules,
-			rawContext: request.arguments,
-		}),
-		resolveLlmConfig(),
-	);
+
+	hostedDebug("hosted", "policy", "Policy evaluation", {
+		toolName: request.toolName,
+		decision: policyEvaluation.decision,
+		reasonCodes: policyEvaluation.reasonCodes,
+		policyId: policyEvaluation.policyId,
+	});
+
+	const llmInput2 = sanitizeLlmJudgeInput({
+		toolName: request.toolName,
+		actionKind: routerResult.classification,
+		network: chainConfig.network,
+		deterministicDecision: policyEvaluation.decision,
+		riskClass: classification.riskClass,
+		reasonCodes: policyEvaluation.reasonCodes,
+		policyId: policyEvaluation.policyId,
+		evaluatedRules: policyEvaluation.evaluatedRules,
+		rawContext: request.arguments,
+		userIntent: request.agentContext?.userIntent,
+	});
+
+	hostedDebug("hosted", "llmJudge", "Sending to LLM judge (known tool)", {
+		toolName: request.toolName,
+		llmInput: llmInput2,
+	});
+
+	const llmDecision = await deps.callLlmJudge(llmInput2, resolveLlmConfig());
+
+	hostedDebug("hosted", "llmJudge", "LLM judge response", {
+		toolName: request.toolName,
+		llmRaw: llmDecision,
+	});
+
 	const clampedDecision = clampLlmDecision(policyEvaluation.decision, llmDecision);
 	const reasons = [
 		...policyEvaluation.reasonCodes,

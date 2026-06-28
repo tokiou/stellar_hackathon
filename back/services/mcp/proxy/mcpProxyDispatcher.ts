@@ -190,6 +190,10 @@ async function callToolWithHybridGuard(input: {
 			localFindings: buildLocalFindings(args.toolName, localDecision),
 			userId: installationId,
 			sessionId,
+			agentContext: {
+				clientName: "mcp-proxy",
+				userIntent: buildUserIntent(args.toolName, args.arguments),
+			},
 		}),
 	);
 
@@ -332,6 +336,36 @@ function createUnavailableDownstreamClient(): ProxyDispatcherConfig["downstream"
 
 function isNotificationMethod(method: string): boolean {
 	return method.startsWith("notifications/");
+}
+
+/**
+ * Build a human-readable user intent from the tool call.
+ * MCP doesn't pass the original user prompt, so we reconstruct intent
+ * from the tool name and arguments. Secrets are excluded.
+ */
+function buildUserIntent(
+	toolName: string,
+	args?: Record<string, unknown>,
+): string {
+	const SECRET_KEYS = new Set(["secretkey", "secret_key", "privatekey", "private_key", "seed", "mnemonic", "password", "token"]);
+
+	const parts: string[] = [];
+	const action = toolName
+		.replace(/^compass_/, "")
+		.replace(/^stellar_/, "")
+		.replace(/^soroban_/, "")
+		.replace(/_/g, " ");
+	parts.push(`User requested: ${action}`);
+
+	if (args) {
+		const relevant = Object.entries(args)
+			.filter(([k, v]) => v !== undefined && v !== null && v !== "" && !SECRET_KEYS.has(k.toLowerCase()))
+			.map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+		if (relevant.length > 0) {
+			parts.push(`with parameters: ${relevant.join(", ")}`);
+		}
+	}
+	return parts.join(". ");
 }
 
 // Re-export audit helpers for test access and cleanup

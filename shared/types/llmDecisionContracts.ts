@@ -19,6 +19,8 @@ export type LlmJudgeInput = {
 	policyId?: string;
 	evaluatedRules?: string[];
 	sanitizedContext?: Record<string, unknown>;
+	/** Original user intent from the agent session (what the user asked to do). */
+	userIntent?: string;
 	sanitized: true;
 };
 
