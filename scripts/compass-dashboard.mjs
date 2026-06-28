@@ -11,44 +11,27 @@
  * No external dependencies.
  */
 import { createServer } from "node:http";
-import { existsSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
+import {
+	existsSync,
+	openSync,
+	readSync,
+	fstatSync,
+	closeSync,
+	readFileSync,
+} from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const PORT = Number(process.env.COMPASS_DASHBOARD_PORT || 4173);
 const EVENTS_FILE = process.env.COMPASS_EVENTS_FILE || ".compass-events.jsonl";
+const HTML_FILE = path.join(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"compass-dashboard.html",
+);
 
-const PAGE = `<!doctype html><html><head><meta charset="utf-8"/>
-<title>Compass — live guard</title><style>
- body{font:14px ui-monospace,Menlo,monospace;background:#0b0e14;color:#cdd6f4;margin:0;padding:24px}
- h1{font-size:16px;margin:0 0 4px} .sub{color:#7f849c;margin:0 0 16px}
- table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #1e2230;vertical-align:top}
- th{color:#7f849c;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
- .pill{padding:2px 10px;border-radius:999px;font-weight:700;font-size:12px}
- .allow{background:#1e3a2a;color:#a6e3a1}.deny{background:#3a1e22;color:#f38ba8}.require_approval{background:#3a341e;color:#f9e2af}
- .tool{color:#89b4fa}.reason{color:#9399b2;max-width:680px}.ts{color:#585b70;white-space:nowrap}
- .counts span{margin-right:16px}
-</style></head><body>
- <h1>🧭 Compass — live guard</h1>
- <p class="sub">Decisions intercepted by the proxy. <span id="conn">connecting…</span></p>
- <p class="counts"><span>allow <b id="c-allow">0</b></span><span>deny <b id="c-deny">0</b></span><span>escalate <b id="c-esc">0</b></span></p>
- <table><thead><tr><th>time</th><th>decision</th><th>tool</th><th>signer</th><th>reason</th></tr></thead><tbody id="rows"></tbody></table>
-<script>
- const rows=document.getElementById('rows');
- const c={allow:0,deny:0,require_approval:0};
- const es=new EventSource('/events');
- es.onopen=()=>document.getElementById('conn').textContent='live';
- es.onerror=()=>document.getElementById('conn').textContent='disconnected';
- es.onmessage=(e)=>{const ev=JSON.parse(e.data);c[ev.outcome]=(c[ev.outcome]||0)+1;
-   document.getElementById('c-allow').textContent=c.allow;
-   document.getElementById('c-deny').textContent=c.deny;
-   document.getElementById('c-esc').textContent=c.require_approval;
-   const label=ev.outcome==='require_approval'?'ESCALATE':ev.outcome.toUpperCase();
-   const tr=document.createElement('tr');
-   const signer=ev.signer==='privy'?('🔐 Privy'+(ev.txHash?' · '+ev.txHash.slice(0,8):'')):'—';
-   tr.innerHTML='<td class=ts>'+new Date(ev.ts).toLocaleTimeString()+'</td>'+
-     '<td><span class="pill '+ev.outcome+'">'+label+'</span></td>'+
-     '<td class=tool>'+ev.tool+'</td><td>'+signer+'</td><td class=reason>'+(ev.reason||'')+'</td>';
-   rows.prepend(tr);};
-</script></body></html>`;
+function loadPage() {
+	return readFileSync(HTML_FILE, "utf8");
+}
 
 const clients = new Set();
 
@@ -105,8 +88,12 @@ createServer((req, res) => {
 		req.on("close", () => clients.delete(res));
 		return;
 	}
+	if (req.url === "/favicon.ico") {
+		res.writeHead(204).end();
+		return;
+	}
 	res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-	res.end(PAGE);
+	res.end(loadPage());
 }).listen(PORT, () => {
 	console.log(`Compass dashboard on http://localhost:${PORT} (tailing ${EVENTS_FILE})`);
 });
