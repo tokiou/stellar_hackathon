@@ -33,3 +33,25 @@ running counters for allow / deny / escalate.
   (`stellar-mcp`), so the feed shows the decision (allow/deny/escalate), not a
   Privy co-signature. Wiring `runStellarGuard` (Privy co-sign) into the proxy's
   ALLOW path is the follow-up that adds a real Privy column.
+
+## UPDATE: Privy co-signing wired into the proxy (verified on Testnet)
+
+With `COMPASS_STELLAR_PROXY_EXECUTE=true` + Privy configured, the proxy no longer
+forwards Stellar mutations (`stellar_payment`) to the self-signing downstream.
+Instead Compass builds the tx from the Privy wallet, runs the guard
+(decode→policy), and on ALLOW **co-signs with Privy and submits**. The dashboard
+then shows a "🔐 Privy" signer badge + txHash on that row.
+
+Verified on Testnet through the proxy: `stellar_payment` → ALLOW → Privy signed →
+submitted (real txHash), feed event `{ outcome:"allow", signer:"privy", txHash }`.
+Reads (`stellar_balance`) still forward to the downstream (override returns null).
+
+Enable with:
+```
+COMPASS_STELLAR_PROXY_EXECUTE=true
+COMPASS_STELLAR_SIGNER_PROVIDER=privy
+PRIVY_APP_ID / PRIVY_APP_SECRET / COMPASS_STELLAR_PRIVY_WALLET_ID /
+COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY / PRIVY_AUTHORIZATION_KEY
+COMPASS_STELLAR_ALLOWLIST=<known recipient G-addrs, comma-separated>
+```
+The Privy wallet must be funded on Testnet (it is the payment source).

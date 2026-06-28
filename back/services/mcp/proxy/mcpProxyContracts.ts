@@ -150,6 +150,14 @@ export type ProxyDispatcherConfig = {
 	hostedClient?: HostedClient;
 	/** Local execution dependency for allowed tool calls. */
 	executeTool?: (args: ProxiedMcpToolCall) => Promise<CallToolResult>;
+	/**
+	 * Optional override: when it returns a result, the proxy uses it INSTEAD of
+	 * gating+forwarding (Compass-executed tools, e.g. Stellar mutations co-signed
+	 * by Privy). Returning null falls through to the normal flow.
+	 */
+	executeOverride?: (
+		args: ProxiedMcpToolCall,
+	) => Promise<ProxyCallToolResult | null>;
 	/** Feature flag that enables hosted guard evaluation. */
 	hybridGuardEnabled?: boolean;
 	/** Optional policy decision override for testing. */

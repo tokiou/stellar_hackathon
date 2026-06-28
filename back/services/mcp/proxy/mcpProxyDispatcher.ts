@@ -63,6 +63,7 @@ export function createProxyDispatcher(
 		policyDecision: policyOverride,
 		installationId,
 		sessionId,
+		executeOverride,
 	} = config;
 
 	return {
@@ -94,6 +95,15 @@ export function createProxyDispatcher(
 			toolName: string;
 			arguments?: Record<string, unknown>;
 		}): Promise<ProxyCallToolResult> {
+			// Compass-executed tools (e.g. Stellar mutations co-signed by Privy)
+			// bypass gate+forward: the override owns the decision and execution.
+			if (executeOverride) {
+				const overridden = await executeOverride(args);
+				if (overridden) {
+					emitProxyDecisionEvent(args.toolName, overridden);
+					return overridden;
+				}
+			}
 			const result = await callToolWithHybridGuard({
 				args,
 				hostedClient,

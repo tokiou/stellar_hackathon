@@ -30,7 +30,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"/>
  <h1>🧭 Compass — live guard</h1>
  <p class="sub">Decisions intercepted by the proxy. <span id="conn">connecting…</span></p>
  <p class="counts"><span>allow <b id="c-allow">0</b></span><span>deny <b id="c-deny">0</b></span><span>escalate <b id="c-esc">0</b></span></p>
- <table><thead><tr><th>time</th><th>decision</th><th>tool</th><th>reason</th></tr></thead><tbody id="rows"></tbody></table>
+ <table><thead><tr><th>time</th><th>decision</th><th>tool</th><th>signer</th><th>reason</th></tr></thead><tbody id="rows"></tbody></table>
 <script>
  const rows=document.getElementById('rows');
  const c={allow:0,deny:0,require_approval:0};
@@ -43,9 +43,10 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"/>
    document.getElementById('c-esc').textContent=c.require_approval;
    const label=ev.outcome==='require_approval'?'ESCALATE':ev.outcome.toUpperCase();
    const tr=document.createElement('tr');
+   const signer=ev.signer==='privy'?('🔐 Privy'+(ev.txHash?' · '+ev.txHash.slice(0,8):'')):'—';
    tr.innerHTML='<td class=ts>'+new Date(ev.ts).toLocaleTimeString()+'</td>'+
      '<td><span class="pill '+ev.outcome+'">'+label+'</span></td>'+
-     '<td class=tool>'+ev.tool+'</td><td class=reason>'+(ev.reason||'')+'</td>';
+     '<td class=tool>'+ev.tool+'</td><td>'+signer+'</td><td class=reason>'+(ev.reason||'')+'</td>';
    rows.prepend(tr);};
 </script></body></html>`;
 

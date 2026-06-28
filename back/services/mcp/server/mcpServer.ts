@@ -36,6 +36,7 @@ import type {
 	ProxyListToolsResult,
 } from "../proxy/mcpProxyContracts";
 import { createProxyDispatcher } from "../proxy/mcpProxyDispatcher";
+import { createStellarProxyExecuteOverride } from "@back/services/stellar/execution/stellarProxyExecutor";
 import { isSafeNonToolMethod } from "../proxy/mcpProxyContracts";
 import type { ProxyMcpServerHandlerDependencies } from "./mcpProxyServerContracts";
 import { parseDownstreamMcpRuntimeConfig } from "../config/mcpRuntimeConfig";
@@ -83,6 +84,7 @@ export function createProxyMcpServer(config: {
 	hostedClient?: Parameters<typeof createProxyDispatcher>[0]["hostedClient"];
 	hybridGuardEnabled?: boolean;
 	executeTool?: Parameters<typeof createProxyDispatcher>[0]["executeTool"];
+	executeOverride?: Parameters<typeof createProxyDispatcher>[0]["executeOverride"];
 	installationId?: string;
 	sessionId?: string;
 } = {}): Server {
@@ -92,6 +94,7 @@ export function createProxyMcpServer(config: {
 		hostedClient: config.hostedClient,
 		hybridGuardEnabled: config.hybridGuardEnabled,
 		executeTool: config.executeTool,
+		executeOverride: config.executeOverride,
 		installationId: config.installationId,
 		sessionId: config.sessionId,
 	});
@@ -249,6 +252,12 @@ export async function startCompassMcpStdioServer(): Promise<void> {
 			hybridGuardEnabled: hostedConfig.hybridGuardEnabled,
 			executeTool: async (args) =>
 				(await downstream.callTool(args)) as CallToolResult,
+			// When Privy is configured, Stellar mutations are co-signed by Privy
+			// inside Compass instead of being forwarded to the self-signing
+			// downstream. Reads and other tools fall through (override returns null).
+			executeOverride: process.env.COMPASS_STELLAR_PROXY_EXECUTE === "true"
+				? createStellarProxyExecuteOverride()
+				: undefined,
 			installationId,
 			sessionId,
 		});
