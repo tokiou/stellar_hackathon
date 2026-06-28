@@ -20,6 +20,7 @@ import type {
 	ProxyListToolsResult,
 } from "./mcpProxyContracts";
 import { isSafeNonToolMethod } from "./mcpProxyContracts";
+import { emitProxyDecisionEvent } from "./proxyEventLog";
 import {
 	classifyProxyToolCall,
 	evaluateProxyToolCallPolicy,
@@ -93,7 +94,7 @@ export function createProxyDispatcher(
 			toolName: string;
 			arguments?: Record<string, unknown>;
 		}): Promise<ProxyCallToolResult> {
-			return callToolWithHybridGuard({
+			const result = await callToolWithHybridGuard({
 				args,
 				hostedClient,
 				executeTool,
@@ -101,6 +102,9 @@ export function createProxyDispatcher(
 				installationId,
 				sessionId,
 			});
+			// Optional dashboard feed (no-op unless COMPASS_EVENTS_FILE is set).
+			emitProxyDecisionEvent(args.toolName, result);
+			return result;
 		},
 
 		async forwardSafeRequest(args: {

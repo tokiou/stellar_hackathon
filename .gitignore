@@ -84,3 +84,4 @@ cdp_api_key.json
 # Accidental space-named files
 /[ ]
 .stellar-demo-wallet.json
+.compass-events.jsonl

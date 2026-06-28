@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 export STELLAR_SERVER_URL="${STELLAR_SERVER_URL:-https://horizon-testnet.stellar.org}"
 export COMPASS_HYBRID_GUARD_ENABLED="${COMPASS_HYBRID_GUARD_ENABLED:-false}"
+# Decision feed for the dashboard (scripts/compass-dashboard.mjs tails the same file).
+export COMPASS_EVENTS_FILE="${COMPASS_EVENTS_FILE:-$REPO/.compass-events.jsonl}"
 exec "$REPO/node_modules/.bin/tsx" "$REPO/back/services/mcp/server/mcpServer.ts" \
   --downstream-name stellar-tools \
   --downstream-command "$REPO/node_modules/.bin/tsx" \
