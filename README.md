@@ -84,17 +84,9 @@ npm run test:back
 
 ## Signer providers (how Compass co-signs)
 
-Compass needs **its own** Stellar key to co-sign (it never holds the user's key). Choose the provider with `COMPASS_STELLAR_SIGNER_PROVIDER`. **It is optional and defaults to `local`** — with no signer configured, Compass still evaluates and decides; it simply cannot add a signature (fail-closed: the multisig threshold stays unmet).
+Compass needs **its own** Stellar key to co-sign (it never holds the user's/agent's key). The provider is `COMPASS_STELLAR_SIGNER_PROVIDER` and **Privy is mandatory by default** (`privy`) — Compass's co-signing key is custodied by Privy; Compass never holds a raw seed. With no signer configured, Compass still evaluates and decides; it just can't add its signature (fail-closed: the threshold stays unmet → the network rejects).
 
-### `local` (default) — key from env
-
-```sh
-export COMPASS_STELLAR_SIGNER_PROVIDER=local      # default; can be omitted
-export COMPASS_STELLAR_SIGNER_ENABLED=true
-export COMPASS_STELLAR_SIGNER_SECRET=S...          # Compass testnet secret seed
-```
-
-### `privy` (optional) — key custodied by Privy
+### `privy` (default, mandatory) — key custodied by Privy
 
 Compass's co-signing key lives in a Privy server wallet (TEE-isolated); Compass signs by calling Privy's raw-sign API and never sees the secret.
 
@@ -124,7 +116,17 @@ Compass's co-signing key lives in a Privy server wallet (TEE-isolated); Compass 
    # ESCALATE -> Privy does not sign -> rejected (tx_bad_auth)
    ```
 
-Privy can also **provision** the agent's Stellar wallet (onboarding): `npx tsx scripts/stellar-privy-provision.mjs` (real Privy when credentials are set, otherwise a simulated wallet for validation).
+> Dev-only escape hatch: a `local` raw-seed signer exists for development behind `COMPASS_ALLOW_LOCAL_SIGNER=true` (+ `COMPASS_STELLAR_SIGNER_ENABLED=true`, `COMPASS_STELLAR_SIGNER_SECRET=S…`). Without it, selecting `local` throws `PRIVY_REQUIRED`.
+
+## Account setup (one-time, by the funds owner)
+
+Co-signing requires the account to be a **2-of-2 multisig**: the owner configures it (via `setOptions`) so that the **agent's key** and **Compass's key** are both required signers (threshold 2). Neither moves funds alone.
+
+- The **agent's key** gives the agent autonomy to sign its own transactions. The owner provisions it (e.g. a Privy wallet for the agent); **Compass never holds it**.
+- **Compass's key** is the policy gate (the Privy server wallet above). Compass signs only on `ALLOW`.
+- The owner keeps ultimate control (master key) and can re-configure signers any time.
+
+If the agent's key is compromised, funds are still safe — without Compass's policy-gated co-signature the threshold is never met.
 
 ## Run as an MCP firewall (with Claude or any MCP client)
 
@@ -136,47 +138,36 @@ Compass is an MCP **proxy**: it wraps a downstream Stellar MCP server and gates 
     "compass-stellar": {
       "command": "bash",
       "args": ["/absolute/path/compass/scripts/compass-stellar-mcp.sh"],
-      "env": {
-        "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org",
-        "COMPASS_HYBRID_GUARD_ENABLED": "false"
-      }
+      "env": { "STELLAR_SERVER_URL": "https://horizon-testnet.stellar.org" }
     }
   }
 }
 ```
 
-Then ask the agent things like *"get the balance of G…"* (allowed, forwarded) vs *"send a payment"* / *"change a trustline"* (gated by Compass). The proxy core is chain-agnostic; pointing it at a different downstream is a config change.
-
-> The proxy prefilter classifies by tool name. Fine-grained per-amount / per-recipient decisions (ALLOW/DENY/ESCALATE) run in the guard pipeline (`runStellarGuard`) and the hosted backend; with the hosted backend disabled, mutating tools are denied fail-closed.
-
-### Privy co-signing through the proxy (and block-by-default)
-
-The proxy never lets a fund-moving operation **self-sign** on the downstream. A
-mutating Stellar tool is either **co-signed by Compass via Privy** or **blocked** —
-never forwarded to a self-signing MCP:
-
-- `stellar_payment` → Compass builds the tx from the Privy wallet, runs the guard,
-  and on **ALLOW** co-signs with Privy and submits; on **DENY/ESCALATE** it does not sign.
-- Any call carrying a raw key (`secretKey`, `seed`, `privateKey`, …) → **denied** (refuses to forward a self-signing call).
-- Other fund-moving / authority-changing tools (`changeTrust`, `createAsset`, `claimClaimableBalance`, `soroban_deploy`, …) → **denied** (not Privy-co-signable yet).
-- Read-only tools (`stellar_balance`, `stellar_transactions`) → forwarded to the downstream.
-
-To enable Privy co-signing through the proxy, put your Privy config in a
-**gitignored** `.compass-privy.env` at the repo root (the launcher sources it):
+Put your Privy config in a **gitignored** `.compass-privy.env` at the repo root (the launcher sources it):
 
 ```sh
 COMPASS_STELLAR_SIGNER_PROVIDER=privy
 PRIVY_APP_ID=...
 PRIVY_APP_SECRET=...
 COMPASS_STELLAR_PRIVY_WALLET_ID=...
-COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY=G...   # also the payment source; fund it via Friendbot
-PRIVY_AUTHORIZATION_KEY=...                     # P-256, secret
-COMPASS_STELLAR_ALLOWLIST=G...,G...             # recipients that resolve to ALLOW
+COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY=G...   # Compass's CO-SIGNER key (added to the account as a required signer)
+PRIVY_AUTHORIZATION_KEY=...                     # P-256, authorizes raw-sign (secret)
+COMPASS_STELLAR_ALLOWLIST=G...,G...             # recipient addresses that resolve to ALLOW
 ```
 
-Run `npx tsx scripts/privy-setup.mjs` (with `PRIVY_APP_ID`/`PRIVY_APP_SECRET`) to
-create the wallet + authorization key and print these values. Restart your MCP
-client so the proxy relaunches with the new config.
+### How co-signing works through the proxy (real 2-of-2)
+
+Compass is a **co-signer**, not a custodian of the agent's key:
+
+- The agent **signs the transaction with its own wallet** (a key Compass never sees) on the 2-of-2 account, then presents the **agent-signed transaction** to the proxy (an `envelopeXdr` argument).
+- The proxy decodes it, runs policy, and on **ALLOW** adds **Compass's** signature (via Privy) and submits → `agent + Compass = 2 signatures` → executes. On **DENY/ESCALATE**, Compass does not co-sign → the tx stays at 1 signature → the network rejects it (`tx_bad_auth`).
+- A transaction the agent did **not** sign first is rejected (Compass only co-signs).
+- A call carrying a **raw key** (`secretKey`, `seed`, `privateKey`, …) or an **unsigned fund-moving** Stellar intent is **blocked** — never forwarded to a self-signing downstream.
+- **Read-only** tools (`stellar_balance`, `stellar_transactions`) are forwarded to the downstream.
+- The override is scoped to `stellar_*` / `soroban_*` tools; other downstream tools go through the normal proxy gate.
+
+Restart your MCP client so the proxy relaunches with the config.
 
 ## Live dashboard
 
@@ -209,18 +200,18 @@ Copy `.env.example` to `.env.local`. Stellar URLs default to Testnet.
 | `STELLAR_FRIENDBOT_URL` | Friendbot funding endpoint (default Testnet) |
 | `FALLBACK_XLM_USD_PRICE` | Stub XLM/USD price for amount thresholds (default `0.1`) |
 
-### Co-signer (optional)
+### Co-signer (Privy mandatory by default)
 
 | Variable | Description |
 |----------|-------------|
-| `COMPASS_STELLAR_SIGNER_PROVIDER` | `local` (default) or `privy` |
-| `COMPASS_STELLAR_SIGNER_ENABLED` | enable the local signer (`local` provider) |
-| `COMPASS_STELLAR_SIGNER_SECRET` | Compass testnet secret seed (`local` provider) |
-| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Privy app credentials (`privy` provider) |
-| `COMPASS_STELLAR_PRIVY_WALLET_ID` | Privy server wallet id (`privy` provider) |
-| `COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY` | the wallet's Stellar `G…` address (also the proxy payment source) |
+| `COMPASS_STELLAR_SIGNER_PROVIDER` | `privy` (default & required) or `local` (dev-only) |
+| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Privy app credentials |
+| `COMPASS_STELLAR_PRIVY_WALLET_ID` | Compass's Privy server wallet id |
+| `COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY` | Compass's co-signer `G…` address (registered on the account as a required signer) |
 | `PRIVY_AUTHORIZATION_KEY` | P-256 authorization key to authorize raw-sign (secret) |
 | `COMPASS_STELLAR_ALLOWLIST` | comma-separated recipient `G…` addresses that resolve to ALLOW |
+| `COMPASS_ALLOW_LOCAL_SIGNER` | dev-only: set `true` to permit the `local` raw-seed signer |
+| `COMPASS_STELLAR_SIGNER_ENABLED` / `COMPASS_STELLAR_SIGNER_SECRET` | `local` dev signer (only with the escape hatch above) |
 
 ### Dashboard / proxy feed
 
