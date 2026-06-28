@@ -132,7 +132,14 @@ export function createStellarProxyExecuteOverride(
 		}
 
 		const config = getStellarNetworkConfig(env);
-		const cosigner = deps.cosigner ?? resolveStellarCosigner(env);
+		let cosigner;
+		try {
+			cosigner = deps.cosigner ?? resolveStellarCosigner(env);
+		} catch (error) {
+			// e.g. PRIVY_REQUIRED when the mandatory factory rejects a local signer:
+			// deny cleanly instead of crashing the proxy.
+			return denyResult(args.toolName, (error as Error).message);
+		}
 		const sourceAddress = env.COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY?.trim();
 		if (!sourceAddress) {
 			return denyResult(args.toolName, "No Privy wallet configured as source (COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY).");
