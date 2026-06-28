@@ -180,12 +180,31 @@ async function cosignAgentTransaction(
 		);
 	}
 
-	// Required signers (threshold) for the audit / non-executability evidence.
-	let threshold: number | undefined;
+	// Enforce that the account is genuinely 2-of-2 with Compass as a required
+	// signer — otherwise co-signing gives no guarantee (a single signer could
+	// move funds). Weight-1 model: Compass must be a signer AND threshold >= 2.
+	let account: import("@shared/chainContracts").AccountSignerState;
 	try {
-		threshold = (await cosigner.inspectAccount(sourceAddress)).threshold;
-	} catch {
-		threshold = undefined;
+		account = await cosigner.inspectAccount(sourceAddress);
+	} catch (error) {
+		return denyResult(toolName, `could not read source account: ${(error as Error).message}`);
+	}
+	if (!account.exists) {
+		return denyResult(toolName, `source account ${sourceAddress} not found on-chain.`);
+	}
+	const compassKey = cosigner.getPublicKey();
+	if (!compassKey || !(account.signers ?? []).includes(compassKey)) {
+		return denyResult(
+			toolName,
+			"account is not configured with Compass as a required signer; refusing to co-sign (not a 2-of-2 Compass-guarded account).",
+		);
+	}
+	const threshold = account.threshold;
+	if (typeof threshold !== "number" || threshold < 2) {
+		return denyResult(
+			toolName,
+			"account threshold is below 2; a single signer could move funds. Configure 2-of-2 (agent + Compass) before co-signing.",
+		);
 	}
 
 	const knownRecipients =

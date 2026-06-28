@@ -136,6 +136,31 @@ describe("createStellarProxyExecuteOverride — real co-signing", () => {
 		expect(submit).not.toHaveBeenCalled();
 	});
 
+	it("refuses to co-sign if the account is NOT 2-of-2 with Compass required", async () => {
+		// Account where Compass is NOT a signer / threshold < 2.
+		const soloCosigner = createPrivyStellarCosigner({
+			env: privyEnv(),
+			client: makePrivyClient(),
+			loadAccount: async () => ({
+				signers: [{ key: AGENT.publicKey(), weight: 1 }],
+				thresholds: { low_threshold: 0, med_threshold: 1, high_threshold: 1 },
+			}),
+		});
+		const submit = vi.fn<[string], Promise<{ hash: string }>>(async () => ({ hash: "x" }));
+		const override = createStellarProxyExecuteOverride({
+			env: privyEnv(),
+			cosigner: soloCosigner,
+			submit,
+			knownRecipients: [DEST],
+		});
+		const result = await override({
+			toolName: "stellar_payment",
+			arguments: { envelopeXdr: agentSignedPayment("50") },
+		});
+		expect(result?.outcome).toBe("deny");
+		expect(submit).not.toHaveBeenCalled();
+	});
+
 	it("ESCALATE: amount out of range -> no co-sign, no submit", async () => {
 		const { override, submit } = makeOverride();
 		const result = await override({

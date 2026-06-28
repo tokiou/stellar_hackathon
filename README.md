@@ -162,6 +162,7 @@ Compass is a **co-signer**, not a custodian of the agent's key:
 
 - The agent **signs the transaction with its own wallet** (a key Compass never sees) on the 2-of-2 account, then presents the **agent-signed transaction** to the proxy (an `envelopeXdr` argument).
 - The proxy decodes it, runs policy, and on **ALLOW** adds **Compass's** signature (via Privy) and submits → `agent + Compass = 2 signatures` → executes. On **DENY/ESCALATE**, Compass does not co-sign → the tx stays at 1 signature → the network rejects it (`tx_bad_auth`).
+- Before co-signing, the proxy **verifies the account is genuinely 2-of-2**: Compass's key must be a required signer and the threshold must be ≥ 2 (no single signer can move funds). If not, it **refuses to co-sign**.
 - A transaction the agent did **not** sign first is rejected (Compass only co-signs).
 - A call carrying a **raw key** (`secretKey`, `seed`, `privateKey`, …) or an **unsigned fund-moving** Stellar intent is **blocked** — never forwarded to a self-signing downstream.
 - **Read-only** tools (`stellar_balance`, `stellar_transactions`) are forwarded to the downstream.
