@@ -149,6 +149,51 @@ Then ask the agent things like *"get the balance of G…"* (allowed, forwarded) 
 
 > The proxy prefilter classifies by tool name. Fine-grained per-amount / per-recipient decisions (ALLOW/DENY/ESCALATE) run in the guard pipeline (`runStellarGuard`) and the hosted backend; with the hosted backend disabled, mutating tools are denied fail-closed.
 
+### Privy co-signing through the proxy (and block-by-default)
+
+The proxy never lets a fund-moving operation **self-sign** on the downstream. A
+mutating Stellar tool is either **co-signed by Compass via Privy** or **blocked** —
+never forwarded to a self-signing MCP:
+
+- `stellar_payment` → Compass builds the tx from the Privy wallet, runs the guard,
+  and on **ALLOW** co-signs with Privy and submits; on **DENY/ESCALATE** it does not sign.
+- Any call carrying a raw key (`secretKey`, `seed`, `privateKey`, …) → **denied** (refuses to forward a self-signing call).
+- Other fund-moving / authority-changing tools (`changeTrust`, `createAsset`, `claimClaimableBalance`, `soroban_deploy`, …) → **denied** (not Privy-co-signable yet).
+- Read-only tools (`stellar_balance`, `stellar_transactions`) → forwarded to the downstream.
+
+To enable Privy co-signing through the proxy, put your Privy config in a
+**gitignored** `.compass-privy.env` at the repo root (the launcher sources it):
+
+```sh
+COMPASS_STELLAR_SIGNER_PROVIDER=privy
+PRIVY_APP_ID=...
+PRIVY_APP_SECRET=...
+COMPASS_STELLAR_PRIVY_WALLET_ID=...
+COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY=G...   # also the payment source; fund it via Friendbot
+PRIVY_AUTHORIZATION_KEY=...                     # P-256, secret
+COMPASS_STELLAR_ALLOWLIST=G...,G...             # recipients that resolve to ALLOW
+```
+
+Run `npx tsx scripts/privy-setup.mjs` (with `PRIVY_APP_ID`/`PRIVY_APP_SECRET`) to
+create the wallet + authorization key and print these values. Restart your MCP
+client so the proxy relaunches with the new config.
+
+## Live dashboard
+
+A zero-dependency dashboard shows, in real time, what the proxy **allowed / denied /
+escalated** and whether **Privy** co-signed.
+
+```sh
+COMPASS_EVENTS_FILE=.compass-events.jsonl node scripts/compass-dashboard.mjs
+# open http://localhost:4173
+```
+
+The proxy launcher already sets `COMPASS_EVENTS_FILE` to the same
+`.compass-events.jsonl`, so every decision streams to the page (SSE): a
+color-coded table (ALLOW green / DENY red / ESCALATE amber), a **🔐 Privy** badge
++ txHash when Compass co-signed, and running counters. Use the MCP via your agent
+and watch decisions appear live.
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local`. Stellar URLs default to Testnet.
@@ -173,8 +218,16 @@ Copy `.env.example` to `.env.local`. Stellar URLs default to Testnet.
 | `COMPASS_STELLAR_SIGNER_SECRET` | Compass testnet secret seed (`local` provider) |
 | `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Privy app credentials (`privy` provider) |
 | `COMPASS_STELLAR_PRIVY_WALLET_ID` | Privy server wallet id (`privy` provider) |
-| `COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY` | the wallet's Stellar `G…` address |
+| `COMPASS_STELLAR_PRIVY_WALLET_PUBLIC_KEY` | the wallet's Stellar `G…` address (also the proxy payment source) |
 | `PRIVY_AUTHORIZATION_KEY` | P-256 authorization key to authorize raw-sign (secret) |
+| `COMPASS_STELLAR_ALLOWLIST` | comma-separated recipient `G…` addresses that resolve to ALLOW |
+
+### Dashboard / proxy feed
+
+| Variable | Description |
+|----------|-------------|
+| `COMPASS_EVENTS_FILE` | JSONL decision feed the proxy appends and the dashboard tails |
+| `COMPASS_DASHBOARD_PORT` | dashboard HTTP port (default `4173`) |
 
 ### Hosted backend / hybrid guard
 
@@ -206,6 +259,7 @@ Copy `.env.example` to `.env.local`. Stellar URLs default to Testnet.
 | `npx tsx scripts/stellar-privy-cosign-demo.mjs` | Mode B co-signer demo (real Privy if configured) |
 | `npx tsx scripts/privy-setup.mjs` | One-time real Privy wallet + authorization key setup |
 | `npx tsx scripts/stellar-privy-provision.mjs` | Provision (onboard) an agent's Stellar wallet via Privy |
+| `node scripts/compass-dashboard.mjs` | Live guard dashboard (allow/deny/escalate + Privy badge) |
 | `npm run test:back` | Backend test suite (vitest) |
 | `npm run mcp:dev` | Start the Compass MCP proxy (stdio) |
 
