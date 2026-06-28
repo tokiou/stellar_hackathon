@@ -55,10 +55,27 @@ describe("isCompassExecutedStellarTool", () => {
 });
 
 describe("createStellarProxyExecuteOverride", () => {
-	it("returns null for non-Compass-executed tools (proxy forwards them)", async () => {
+	it("forwards read-only tools (override returns null)", async () => {
 		const override = createStellarProxyExecuteOverride(deps());
 		const result = await override({ toolName: "stellar_balance", arguments: { account: "G..." } });
 		expect(result).toBeNull();
+	});
+
+	it("BLOCKS fund-moving tools it cannot co-sign via Privy (no self-signing)", async () => {
+		const override = createStellarProxyExecuteOverride(deps());
+		for (const tool of ["stellar_change_trust", "stellar_claim_claimable_balance", "soroban_deploy"]) {
+			const result = await override({ toolName: tool, arguments: {} });
+			expect(result?.outcome).toBe("deny");
+		}
+	});
+
+	it("BLOCKS any call carrying a raw secret key (anti self-sign)", async () => {
+		const override = createStellarProxyExecuteOverride(deps());
+		const result = await override({
+			toolName: "stellar_create_asset",
+			arguments: { issuerSecretKey: "SABC...", code: "USDC" },
+		});
+		expect(result?.outcome).toBe("deny");
 	});
 
 	it("ALLOW: co-signs via Privy and submits, marking the signer", async () => {

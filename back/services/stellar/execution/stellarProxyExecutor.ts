@@ -25,10 +25,45 @@ import type { CompassPolicy } from "@shared/policyContracts";
  * so the dashboard can show that Privy signed.
  */
 
-const COMPASS_EXECUTED_TOOLS = new Set(["stellar_payment"]);
+/** Tools Compass executes via Privy co-signing (build + Privy sign + submit). */
+const PRIVY_EXECUTABLE_TOOLS = new Set(["stellar_payment"]);
+
+/**
+ * Fund-moving / authority-changing downstream tools that Compass does NOT
+ * co-sign via Privy (yet). They must be BLOCKED — never forwarded to a
+ * self-signing downstream — so an agent cannot move funds without Privy.
+ */
+const BLOCKED_SELF_SIGNING_TOOLS = new Set([
+	"stellar_create_account",
+	"stellar_create_asset",
+	"stellar_change_trust",
+	"stellar_create_claimable_balance",
+	"stellar_claim_claimable_balance",
+	"soroban_deploy",
+]);
+
+/** Arg names that indicate the caller is trying to self-sign with a raw key. */
+const RAW_KEY_ARG_NAMES = [
+	"secretKey",
+	"secret_key",
+	"seed",
+	"privateKey",
+	"private_key",
+	"issuerSecretKey",
+	"distributorSecretKey",
+];
 
 export function isCompassExecutedStellarTool(toolName: string): boolean {
-	return COMPASS_EXECUTED_TOOLS.has(toolName);
+	return PRIVY_EXECUTABLE_TOOLS.has(toolName);
+}
+
+function hasRawKeyArg(args?: Record<string, unknown>): boolean {
+	if (!args) {
+		return false;
+	}
+	return RAW_KEY_ARG_NAMES.some(
+		(name) => typeof args[name] === "string" && (args[name] as string).length > 0,
+	);
 }
 
 type AccountFacts = { sequence: string; medThreshold: number };
@@ -71,8 +106,22 @@ export function createStellarProxyExecuteOverride(
 	const env = deps.env ?? process.env;
 
 	return async (args) => {
+		// Anti-bypass: a fund-moving op is either co-signed by Privy or BLOCKED.
+		// It is never forwarded to a self-signing downstream.
 		if (!isCompassExecutedStellarTool(args.toolName)) {
-			return null;
+			if (hasRawKeyArg(args.arguments)) {
+				return denyResult(
+					args.toolName,
+					"refusing to forward a self-signing call (raw key in args). Compass co-signs via Privy or blocks.",
+				);
+			}
+			if (BLOCKED_SELF_SIGNING_TOOLS.has(args.toolName)) {
+				return denyResult(
+					args.toolName,
+					`${args.toolName} moves funds / changes authority and is not co-signable via Privy; blocked to prevent self-signing.`,
+				);
+			}
+			return null; // read-only / non-fund-moving -> forward to downstream
 		}
 
 		const params = args.arguments ?? {};

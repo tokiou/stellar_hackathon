@@ -252,12 +252,10 @@ export async function startCompassMcpStdioServer(): Promise<void> {
 			hybridGuardEnabled: hostedConfig.hybridGuardEnabled,
 			executeTool: async (args) =>
 				(await downstream.callTool(args)) as CallToolResult,
-			// When Privy is configured, Stellar mutations are co-signed by Privy
-			// inside Compass instead of being forwarded to the self-signing
-			// downstream. Reads and other tools fall through (override returns null).
-			executeOverride: process.env.COMPASS_STELLAR_PROXY_EXECUTE === "true"
-				? createStellarProxyExecuteOverride()
-				: undefined,
+			// Safe default: fund-moving Stellar ops are co-signed by Privy or
+			// BLOCKED — never forwarded to a self-signing downstream. Reads fall
+			// through (override returns null). Always installed.
+			executeOverride: createStellarProxyExecuteOverride(),
 			installationId,
 			sessionId,
 		});
